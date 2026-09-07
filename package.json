@@ -1,0 +1,25 @@
+{
+  "name": "vul_x",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lexxx02/Vul_X.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/lexxx02/Vul_X/issues"
+  },
+  "homepage": "https://github.com/lexxx02/Vul_X#readme",
+  "devDependencies": {
+    "eslint": "^10.10.0",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2"
+  }
+}
