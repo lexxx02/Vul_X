@@ -1,2 +1,22 @@
+# Dependencias y compilación
 node_modules/
 dist/
+
+# Credenciales y variables de entorno
+.env
+.env.*
+
+# Configuraciones de editores
+.vscode/
+.idea/
+
+# Registros de errores
+*.log
+npm-debug.log*
+
+# Archivos ocultos del sistema
+.DS_Store
+Thumbs.db
+
+# Reportes de pruebas
+coverage/
