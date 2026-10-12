@@ -6,6 +6,7 @@ import Fastify, {
 import { createDefaultRuleEngine, type RuleEngine } from '../core/rules/index.js';
 import { createAnalysisContext } from '../core/parser.js';
 
+
 export const server: FastifyInstance = Fastify({
   logger: process.env.NODE_ENV === 'test' ? false : true
 });
