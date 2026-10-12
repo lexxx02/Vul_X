@@ -43,7 +43,12 @@ declare module 'tree-sitter-javascript' {
 
 declare module 'tree-sitter-typescript' {
   import type { Language } from 'tree-sitter';
-  const typescript: Language;
-  const tsx: Language;
-  export { typescript, tsx };
+  export const typescript: Language;
+  export const tsx: Language;
+  const mod: {
+    typescript: Language;
+    tsx: Language;
+  };
+  export default mod;
 }
+

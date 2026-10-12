@@ -19,6 +19,12 @@ export class RuleEngine {
   /** Registro interno de todas las reglas de seguridad disponibles */
   private rules: SecurityRule[] = [];
 
+  constructor(initialRules: SecurityRule[] = []) {
+    if (initialRules.length > 0) {
+      this.registerRules(initialRules);
+    }
+  }
+
   /**
    * Registra una nueva regla de seguridad en el motor.
    *
