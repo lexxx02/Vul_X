@@ -1,0 +1,47 @@
+{
+  "name": "vulx-extension",
+  "displayName": "VulX Security Analyzer",
+  "description": "Extensión de VS Code para detección inteligente y contextual de vulnerabilidades en código",
+  "version": "0.1.0",
+  "publisher": "vulx-team",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescriptreact"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vulx.helloWorld",
+        "title": "VulX: Saludo de prueba (Ciclo de vida)"
+      },
+      {
+        "command": "vulx.readBuffer",
+        "title": "VulX: Leer buffer del editor activo"
+      },
+      {
+        "command": "vulx.scanCurrentFile",
+        "title": "VulX: Preparar payload de escaneo (Buffer activo)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.0"
+  }
+}
