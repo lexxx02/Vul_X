@@ -1,0 +1,387 @@
+import type { Vulnerability, Remediation, ReplacementRange } from '../../core/rules/SecurityRule.js';
+
+/**
+ * Opciones de configuración para inicializar AIService
+ */
+export interface AIServiceOptions {
+  /** URL base de la API de Ollama (por defecto: http://127.0.0.1:11434) */
+  ollamaUrl?: string;
+  /** Nombre del modelo de IA local (por defecto: qwen2.5-coder:7b) */
+  model?: string;
+  /** Tiempo límite en ms para la llamada a la IA antes de usar fallback (por defecto: 4000ms) */
+  timeoutMs?: number;
+  /** Proveedor personalizado de inferencia (útil para inyección de mocks en pruebas) */
+  inferenceProvider?: (prompt: string) => Promise<string>;
+}
+
+/**
+ * Respuesta estructurada esperada de la IA para una remediación
+ */
+export interface AIRemediationPayload {
+  fixedSnippet: string;
+  explanation: string;
+}
+
+/**
+ * AIService — Servicio de Inteligencia Artificial y Remediación de Código.
+ *
+ * Responsabilidades:
+ * 1. Generar prompts especializados para remediación segura.
+ * 2. Consultar al motor de inferencia local (Ollama / Qwen 2.5 Coder 7B) con respuestas en JSON estricto.
+ * 3. Limpiar y validar el código devuelto por la IA.
+ * 4. Calcular el diff unificado estilo Git (- y +).
+ * 5. Determinar las coordenadas exactas de reemplazo (ReplacementRange) para acciones de Quick Fix en el IDE.
+ * 6. Proveer mecanismos de fallback heurísticos de alta velocidad cuando Ollama no esté disponible.
+ */
+export class AIService {
+  private readonly ollamaUrl: string;
+  private readonly model: string;
+  private readonly timeoutMs: number;
+  private readonly inferenceProvider?: ((prompt: string) => Promise<string>) | undefined;
+
+  constructor(options: AIServiceOptions = {}) {
+    this.ollamaUrl = options.ollamaUrl || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+    this.model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
+    this.timeoutMs = options.timeoutMs ?? 4000;
+    this.inferenceProvider = options.inferenceProvider;
+  }
+
+  /**
+   * Construye un prompt enfocado en remediación estricta y formato JSON estructurado.
+   */
+  public generatePrompt(vulnerability: Vulnerability, sourceCode: string): string {
+    return [
+      `Eres un asistente experto en seguridad de código para la herramienta VulX.`,
+      `Se ha detectado la siguiente vulnerabilidad en el código fuente:`,
+      `- Regla ID: ${vulnerability.id}`,
+      `- Nombre: ${vulnerability.name}`,
+      `- Severidad: ${vulnerability.severity}`,
+      `- Línea: ${vulnerability.line}`,
+      `- Descripción: ${vulnerability.description}`,
+      `- Fragmento vulnerable:`,
+      `\`\`\``,
+      vulnerability.codeSnippet,
+      `\`\`\``,
+      ``,
+      `Contexto general del código (parcial):`,
+      `\`\`\``,
+      sourceCode.substring(0, 1000),
+      `\`\`\``,
+      ``,
+      `Instrucciones estrictas:`,
+      `1. Corrige la vulnerabilidad aplicando las mejores prácticas de seguridad recomendadas.`,
+      `2. Devuelve ÚNICAMENTE un objeto JSON válido con los campos "fixedSnippet" y "explanation".`,
+      `3. En "fixedSnippet" pon EXCLUSIVAMENTE el fragmento de código corregido que debe reemplazar exactamente al fragmento vulnerable (sin bloques de markdown adicionales ni explicaciones fuera del JSON).`,
+      `4. En "explanation" proporciona una explicación breve y técnica de la solución.`,
+      ``,
+      `Ejemplo de formato de respuesta JSON:`,
+      `{`,
+      `  "fixedSnippet": "elemento.textContent = userInput;",`,
+      `  "explanation": "Se reemplazó innerHTML por textContent para evitar inyección de scripts (XSS).",`,
+      `}`
+    ].join('\n');
+  }
+
+  /**
+   * Calcula las coordenadas de reemplazo (ReplacementRange) en base al inicio del hallazgo y su fragmento.
+   */
+  public calculateReplacementRange(
+    vulnerability: Vulnerability,
+    _sourceCode?: string
+  ): ReplacementRange {
+    const lines = vulnerability.codeSnippet.split(/\r?\n/);
+    const startLine = vulnerability.line;
+    const startColumn = vulnerability.column;
+
+    if (lines.length <= 1) {
+      return {
+        startLine,
+        endLine: startLine,
+        startColumn,
+        endColumn: startColumn + vulnerability.codeSnippet.length
+      };
+    }
+
+    const endLine = startLine + lines.length - 1;
+    const lastLine = lines[lines.length - 1] ?? '';
+    const endColumn = lastLine.length;
+
+    return {
+      startLine,
+      endLine,
+      startColumn,
+      endColumn
+    };
+  }
+
+  /**
+   * Genera un diff unificado estilo Git entre el código original y el corregido.
+   */
+  public generateDiff(
+    originalSnippet: string,
+    fixedSnippet: string,
+    startLine = 1
+  ): string {
+    const origLines = originalSnippet.trimEnd().split(/\r?\n/);
+    const fixedLines = fixedSnippet.trimEnd().split(/\r?\n/);
+
+    const origCount = origLines.length;
+    const fixedCount = fixedLines.length;
+
+    const diffRows: string[] = [
+      `@@ -${startLine},${origCount} +${startLine},${fixedCount} @@`
+    ];
+
+    for (const line of origLines) {
+      diffRows.push(`- ${line}`);
+    }
+
+    for (const line of fixedLines) {
+      diffRows.push(`+ ${line}`);
+    }
+
+    return diffRows.join('\n');
+  }
+
+  /**
+   * Limpia y extrae el JSON o fragmento de código de la respuesta textual de la IA.
+   */
+  public parseAIResponse(
+    rawResponse: string,
+    vulnerability: Vulnerability
+  ): AIRemediationPayload {
+    try {
+      // 1. Intentar parsear directamente como JSON
+      const parsed = JSON.parse(rawResponse.trim());
+      if (parsed && typeof parsed.fixedSnippet === 'string') {
+        return {
+          fixedSnippet: this.sanitizeCodeSnippet(parsed.fixedSnippet),
+          explanation: parsed.explanation || vulnerability.recommendation
+        };
+      }
+    } catch {
+      // Continuar al intento de extracción mediante expresiones regulares
+    }
+
+    // 2. Extraer bloque JSON si viene envuelto en markdown ```json ... ```
+    const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (jsonMatch && jsonMatch[1]) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        if (parsed && typeof parsed.fixedSnippet === 'string') {
+          return {
+            fixedSnippet: this.sanitizeCodeSnippet(parsed.fixedSnippet),
+            explanation: parsed.explanation || vulnerability.recommendation
+          };
+        }
+      } catch {
+        // Ignorar y pasar a fallback
+      }
+    }
+
+    // 3. Si la IA devolvió solo un bloque de código como markdown: ```js ... ```
+    const codeBlockMatch = rawResponse.match(/```(?:javascript|typescript|js|ts)?\s*([\s\S]*?)\s*```/i);
+    if (codeBlockMatch && codeBlockMatch[1]) {
+      return {
+        fixedSnippet: this.sanitizeCodeSnippet(codeBlockMatch[1]),
+        explanation: vulnerability.recommendation
+      };
+    }
+
+    // 4. Si falló el parseo, recurrir a la remediación heurística
+    return this.getHeuristicRemediation(vulnerability);
+  }
+
+  /**
+   * Elimina artefactos o backticks innecesarios de un snippet de código.
+   */
+  private sanitizeCodeSnippet(snippet: string): string {
+    let cleaned = snippet.trim();
+    if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
+      cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '');
+    }
+    return cleaned.trim();
+  }
+
+  /**
+   * Proporciona una remediación heurística determinística según la regla de seguridad.
+   * Garantiza que el backend siempre entregue una respuesta válida de remediación incluso
+   * cuando el servicio de IA local esté desconectado o en pruebas.
+   */
+  public getHeuristicRemediation(vulnerability: Vulnerability): AIRemediationPayload {
+    const { id, codeSnippet } = vulnerability;
+
+    switch (id) {
+      case 'DOM_XSS': {
+        if (codeSnippet.includes('.innerHTML')) {
+          const fixed = codeSnippet.replace(/\.innerHTML\s*=/, '.textContent =');
+          return {
+            fixedSnippet: fixed,
+            explanation: 'Se sustituyó .innerHTML por .textContent para prevenir la ejecución no controlada de scripts en el DOM.'
+          };
+        }
+        if (codeSnippet.includes('.outerHTML')) {
+          const fixed = codeSnippet.replace(/\.outerHTML\s*=/, '.textContent =');
+          return {
+            fixedSnippet: fixed,
+            explanation: 'Se sustituyó .outerHTML por asignación segura de texto para mitigar riesgo de DOM XSS.'
+          };
+        }
+        if (codeSnippet.includes('document.write')) {
+          return {
+            fixedSnippet: '// TODO: Reemplazar document.write por document.createElement() y appendChild() seguro\n' +
+              codeSnippet.replace(/document\.write\((.*)\);?/, '/* document.write deprecado */ console.warn("Evitar document.write");'),
+            explanation: 'document.write sobreescribe el flujo HTML y es inseguro. Usa manipulación estructurada del DOM.'
+          };
+        }
+        return {
+          fixedSnippet: `// Sanitizar entrada antes de renderizar\n${codeSnippet}`,
+          explanation: vulnerability.recommendation || 'Sanitiza cualquier entrada del usuario antes de insertarla en el DOM.'
+        };
+      }
+
+      case 'SQL_INJECTION': {
+        return {
+          fixedSnippet: '// Utilizar consulta parametrizada con placeholders (ej: $1, ?, :val)\n' +
+            codeSnippet.replace(/\+[^;]+/, '/* pasar como parámetro en array de valores */'),
+          explanation: 'Reemplaza la concatenación dinámica por consultas parametrizadas o sentencias preparadas.'
+        };
+      }
+
+      case 'HARDCODED_SECRET': {
+        return {
+          fixedSnippet: codeSnippet.replace(/["'][A-Za-z0-9_\-\.\/\+=]{8,}["']/, 'process.env.SECRET_TOKEN!'),
+          explanation: 'Extrae la credencial codificada hacia una variable de entorno (.env) para evitar filtraciones en el repositorio.'
+        };
+      }
+
+      case 'EVAL_USAGE': {
+        return {
+          fixedSnippet: codeSnippet.replace(/\beval\((.*)\)/, 'JSON.parse($1)'),
+          explanation: 'Evita el uso de eval(). Emplea JSON.parse() o deserializadores seguros según el caso de uso.'
+        };
+      }
+
+      default:
+        return {
+          fixedSnippet: `/* Corrección sugerida */\n${codeSnippet}`,
+          explanation: vulnerability.recommendation || 'Aplica la recomendación de seguridad para mitigar el riesgo reportado.'
+        };
+    }
+  }
+
+  /**
+   * Invoca el motor de inferencia local de Ollama con un timeout seguro.
+   */
+  private async queryInferenceEngine(prompt: string): Promise<string> {
+    if (this.inferenceProvider) {
+      return this.inferenceProvider(prompt);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await fetch(`${this.ollamaUrl}/api/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: this.model,
+          prompt,
+          stream: false,
+          format: 'json'
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama respondió con código HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as { response?: string };
+      if (!data.response) {
+        throw new Error('Respuesta vacía recibida de Ollama');
+      }
+
+      return data.response;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Ensambla el objeto de remediación completo con código corregido, diff y coordenadas.
+   */
+  public formatRemediation(
+    vulnerability: Vulnerability,
+    fixedSnippet: string,
+    explanation: string,
+    sourceCode?: string
+  ): Remediation {
+    const replacementRange = this.calculateReplacementRange(vulnerability, sourceCode);
+    const diff = this.generateDiff(
+      vulnerability.codeSnippet,
+      fixedSnippet,
+      vulnerability.line
+    );
+
+    return {
+      explanation,
+      fixedSnippet,
+      diff,
+      replacementRange
+    };
+  }
+
+  /**
+   * Genera la remediación para una vulnerabilidad específica.
+   */
+  public async remediate(
+    vulnerability: Vulnerability,
+    sourceCode: string
+  ): Promise<Vulnerability> {
+    let payload: AIRemediationPayload;
+
+    try {
+      const prompt = this.generatePrompt(vulnerability, sourceCode);
+      const rawResponse = await this.queryInferenceEngine(prompt);
+      payload = this.parseAIResponse(rawResponse, vulnerability);
+    } catch {
+      // Si la IA no está disponible o da timeout, aplicar remediación heurística determinística
+      payload = this.getHeuristicRemediation(vulnerability);
+    }
+
+    const remediation = this.formatRemediation(
+      vulnerability,
+      payload.fixedSnippet,
+      payload.explanation,
+      sourceCode
+    );
+
+    return {
+      ...vulnerability,
+      remediation
+    };
+  }
+
+  /**
+   * Genera remediaciones completas para todas las vulnerabilidades encontradas.
+   */
+  public async remediateAll(
+    vulnerabilities: Vulnerability[],
+    sourceCode: string
+  ): Promise<Vulnerability[]> {
+    if (!vulnerabilities || vulnerabilities.length === 0) {
+      return [];
+    }
+
+    // Ejecutar en paralelo la generación de remediaciones
+    const remediatedPromises = vulnerabilities.map((vuln) =>
+      this.remediate(vuln, sourceCode)
+    );
+
+    return Promise.all(remediatedPromises);
+  }
+}

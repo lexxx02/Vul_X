@@ -31,6 +31,39 @@ export interface Vulnerability {
 
   /** Sugerencia de corrección generada por la regla o por la IA */
   recommendation: string;
+
+  /** Remediación estructurada con código corregido, diff y coordenadas de reemplazo */
+  remediation?: Remediation;
+}
+
+/**
+ * Coordenadas de reemplazo para que el editor (VS Code / Antigravity)
+ * pueda aplicar un Quick Fix con precisión de línea y columna.
+ */
+export interface ReplacementRange {
+  startLine: number;
+  endLine: number;
+  startColumn: number;
+  endColumn: number;
+}
+
+/**
+ * Representa la solución estructurada (remediación) para una vulnerabilidad.
+ * Contiene el código corregido, la explicación técnica, el diff unificado
+ * y el rango de reemplazo exacto para el IDE.
+ */
+export interface Remediation {
+  /** Explicación concisa y técnica de por qué y cómo se corrigió */
+  explanation: string;
+
+  /** Fragmento de código corregido que reemplaza al vulnerable */
+  fixedSnippet: string;
+
+  /** Diff en formato unificado estilo Git (con prefijos - y +) */
+  diff: string;
+
+  /** Coordenadas precisas para aplicar el parche en el editor (Quick Fix) */
+  replacementRange: ReplacementRange;
 }
 
 /**
