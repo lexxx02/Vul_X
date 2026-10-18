@@ -1,13 +1,19 @@
 # Dependencias y compilación
 node_modules/
 dist/
+out/
 
 # Credenciales y variables de entorno
 .env
 .env.*
 
-# Configuraciones de editores
-.vscode/
+# Configuraciones de editores (permitir launch.json y tasks.json para F5)
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+**/.vscode/*
+!**/.vscode/launch.json
+!**/.vscode/tasks.json
 .idea/
 
 # Registros de errores
