@@ -5,6 +5,7 @@ import Fastify, {
 } from 'fastify';
 import { createDefaultRuleEngine, type RuleEngine } from '../core/rules/index.js';
 import { createAnalysisContext } from '../core/parser.js';
+import { AIService } from './services/AIService.js';
 
 
 export const server: FastifyInstance = Fastify({
@@ -12,6 +13,7 @@ export const server: FastifyInstance = Fastify({
 });
 
 export const ruleEngine: RuleEngine = createDefaultRuleEngine();
+export const aiService: AIService = new AIService();
 
 // GET /health
 server.get('/health', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -34,7 +36,8 @@ const analyzeBodySchema = {
   properties: {
     code: { type: 'string', minLength: 1 },
     language: { type: 'string' },
-    filePath: { type: 'string' }
+    filePath: { type: 'string' },
+    includeRemediation: { type: 'boolean', default: true }
   }
 };
 
@@ -59,7 +62,24 @@ const analyzeResponseSchema = {
                 line: { type: 'number' },
                 column: { type: 'number' },
                 codeSnippet: { type: 'string' },
-                recommendation: { type: 'string' }
+                recommendation: { type: 'string' },
+                remediation: {
+                  type: 'object',
+                  properties: {
+                    explanation: { type: 'string' },
+                    fixedSnippet: { type: 'string' },
+                    diff: { type: 'string' },
+                    replacementRange: {
+                      type: 'object',
+                      properties: {
+                        startLine: { type: 'number' },
+                        endLine: { type: 'number' },
+                        startColumn: { type: 'number' },
+                        endColumn: { type: 'number' }
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -83,24 +103,31 @@ interface AnalyzeBody {
   code: string;
   language?: string;
   filePath?: string;
+  includeRemediation?: boolean;
 }
 
 const analyzeHandler = async (
   request: FastifyRequest<{ Body: AnalyzeBody }>,
   reply: FastifyReply
 ) => {
-  const { code, language, filePath } = request.body;
+  const { code, language, filePath, includeRemediation } = request.body;
 
   server.log.info(
     { language: language || 'auto', filePath },
-    'Ejecutando análisis determinístico con RuleEngine'
+    'Ejecutando análisis determinístico con RuleEngine y remediación con AIService'
   );
 
   // 1. Parsear el código con Tree-sitter y construir el AnalysisContext
   const context = createAnalysisContext(code, language, filePath);
 
   // 2. Ejecutar el RuleEngine con las reglas AST registradas
-  const vulnerabilities = ruleEngine.analyze(context);
+  const rawVulnerabilities = ruleEngine.analyze(context);
+
+  // 3. Generar respuestas de remediación completas con AIService si está activo
+  const shouldRemediate = includeRemediation !== false;
+  const vulnerabilities = shouldRemediate && rawVulnerabilities.length > 0
+    ? await aiService.remediateAll(rawVulnerabilities, code)
+    : rawVulnerabilities;
 
   const summary = {
     total: vulnerabilities.length,

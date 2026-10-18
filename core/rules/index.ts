@@ -5,7 +5,7 @@ import { SQLiRule } from './definitions/SQLiRule.js';
 import { SecretRule } from './definitions/SecretRule.js';
 
 export { SecurityRule } from './SecurityRule.js';
-export type { Vulnerability, AnalysisContext } from './SecurityRule.js';
+export type { Vulnerability, AnalysisContext, Remediation, ReplacementRange } from './SecurityRule.js';
 export { RuleEngine } from './RuleEngine.js';
 
 // ─── Reglas de detección ───
