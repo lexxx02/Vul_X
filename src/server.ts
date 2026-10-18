@@ -1,15 +1,33 @@
-import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type FastifyReply
+} from 'fastify';
+import { createDefaultRuleEngine, type RuleEngine } from '../core/rules/index.js';
+import { createAnalysisContext } from '../core/parser.js';
 
-const server: FastifyInstance = Fastify({
-  logger: true
+
+export const server: FastifyInstance = Fastify({
+  logger: process.env.NODE_ENV === 'test' ? false : true
 });
+
+export const ruleEngine: RuleEngine = createDefaultRuleEngine();
 
 // GET /health
 server.get('/health', async (request: FastifyRequest, reply: FastifyReply) => {
   return { status: 'ok', timestamp: new Date().toISOString() };
 });
 
-// Schema formal para POST /api/v1/analyze
+// GET /rules - Lista las reglas de seguridad registradas en el RuleEngine
+server.get('/rules', async (request: FastifyRequest, reply: FastifyReply) => {
+  return {
+    status: 'success',
+    count: ruleEngine.getRuleCount(),
+    rules: ruleEngine.getRegisteredRules()
+  };
+});
+
+// Schema formal para POST /analyze y /api/v1/analyze
 const analyzeBodySchema = {
   type: 'object',
   required: ['code'],
@@ -35,10 +53,24 @@ const analyzeResponseSchema = {
               type: 'object',
               properties: {
                 id: { type: 'string' },
+                name: { type: 'string' },
                 description: { type: 'string' },
                 severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
-                line: { type: 'number' }
+                line: { type: 'number' },
+                column: { type: 'number' },
+                codeSnippet: { type: 'string' },
+                recommendation: { type: 'string' }
               }
+            }
+          },
+          summary: {
+            type: 'object',
+            properties: {
+              total: { type: 'number' },
+              critical: { type: 'number' },
+              high: { type: 'number' },
+              medium: { type: 'number' },
+              low: { type: 'number' }
             }
           }
         }
@@ -53,34 +85,59 @@ interface AnalyzeBody {
   filePath?: string;
 }
 
-// POST /api/v1/analyze
-server.post<{ Body: AnalyzeBody }>(
-  '/api/v1/analyze',
-  {
-    schema: {
-      body: analyzeBodySchema,
-      response: analyzeResponseSchema
+const analyzeHandler = async (
+  request: FastifyRequest<{ Body: AnalyzeBody }>,
+  reply: FastifyReply
+) => {
+  const { code, language, filePath } = request.body;
+
+  server.log.info(
+    { language: language || 'auto', filePath },
+    'Ejecutando análisis determinístico con RuleEngine'
+  );
+
+  // 1. Parsear el código con Tree-sitter y construir el AnalysisContext
+  const context = createAnalysisContext(code, language, filePath);
+
+  // 2. Ejecutar el RuleEngine con las reglas AST registradas
+  const vulnerabilities = ruleEngine.analyze(context);
+
+  const summary = {
+    total: vulnerabilities.length,
+    critical: vulnerabilities.filter((v) => v.severity === 'critical').length,
+    high: vulnerabilities.filter((v) => v.severity === 'high').length,
+    medium: vulnerabilities.filter((v) => v.severity === 'medium').length,
+    low: vulnerabilities.filter((v) => v.severity === 'low').length
+  };
+
+  return reply.code(200).send({
+    status: 'success',
+    message:
+      vulnerabilities.length > 0
+        ? `Análisis completado: se detectaron ${vulnerabilities.length} vulnerabilidad(es)`
+        : 'Análisis completado: no se detectaron vulnerabilidades',
+    analysis: {
+      vulnerabilities,
+      summary
     }
-  },
-  async (request, reply) => {
-    const { code, language, filePath } = request.body;
+  });
+};
 
-    // Aquí irá la lógica de integración con Tree-sitter y Ollama
-    server.log.info(`Analizando código en lenguaje: ${language || 'desconocido'}`);
-
-    // Respuesta mock para el contrato
-    return {
-      status: 'success',
-      message: 'Análisis completado (Mock)',
-      analysis: {
-        vulnerabilities: []
-      }
-    };
+const analyzeRouteConfig = {
+  schema: {
+    body: analyzeBodySchema,
+    response: analyzeResponseSchema
   }
-);
+};
+
+// Endpoint principal especificado en arquitectura y requerimientos (/analyze)
+server.post<{ Body: AnalyzeBody }>('/analyze', analyzeRouteConfig, analyzeHandler);
+
+// Endpoint versionado (/api/v1/analyze)
+server.post<{ Body: AnalyzeBody }>('/api/v1/analyze', analyzeRouteConfig, analyzeHandler);
 
 // Iniciar servidor
-const start = async () => {
+export const start = async () => {
   try {
     const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
     await server.listen({ port, host: '0.0.0.0' });
@@ -91,4 +148,15 @@ const start = async () => {
   }
 };
 
-start();
+import { fileURLToPath } from 'node:url';
+
+// Iniciar servidor únicamente si este archivo se ejecuta directamente (no cuando se importa en pruebas)
+const isDirectRun =
+  process.argv[1] &&
+  fileURLToPath(import.meta.url).replace(/\\/g, '/').toLowerCase() ===
+    process.argv[1].replace(/\\/g, '/').toLowerCase();
+
+if (isDirectRun) {
+  start();
+}
+
