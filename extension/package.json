@@ -21,6 +21,14 @@
   "contributes": {
     "commands": [
       {
+        "command": "vulx.analyzeCurrentFile",
+        "title": "VulX: Analizar archivo activo (Detección y Squiggles)"
+      },
+      {
+        "command": "vulx.clearDiagnostics",
+        "title": "VulX: Limpiar diagnósticos de seguridad"
+      },
+      {
         "command": "vulx.helloWorld",
         "title": "VulX: Saludo de prueba (Ciclo de vida)"
       },
