@@ -8,7 +8,7 @@ export interface AIServiceOptions {
   ollamaUrl?: string;
   /** Nombre del modelo de IA local (por defecto: qwen2.5-coder:7b) */
   model?: string;
-  /** Tiempo límite en ms para la llamada a la IA antes de usar fallback (por defecto: 4000ms) */
+  /** Tiempo límite en ms para la llamada a la IA antes de usar fallback (por defecto: 60000ms) */
   timeoutMs?: number;
   /** Proveedor personalizado de inferencia (útil para inyección de mocks en pruebas) */
   inferenceProvider?: (prompt: string) => Promise<string>;
@@ -42,43 +42,55 @@ export class AIService {
   constructor(options: AIServiceOptions = {}) {
     this.ollamaUrl = options.ollamaUrl || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
     this.model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
-    this.timeoutMs = options.timeoutMs ?? 4000;
+    this.timeoutMs = options.timeoutMs ?? 60_000;
     this.inferenceProvider = options.inferenceProvider;
   }
 
   /**
-   * Construye un prompt enfocado en remediación estricta y formato JSON estructurado.
+   * System prompt estricto enviado a Ollama en el campo `system`.
+   * Obliga al modelo a responder ÚNICAMENTE con JSON válido.
+   */
+  private readonly SYSTEM_PROMPT = [
+    'Eres un asistente experto en seguridad de código para la herramienta SAST "VulX".',
+    'Tu ÚNICA función es analizar fragmentos de código vulnerables y devolver la corrección.',
+    '',
+    'REGLAS INQUEBRANTABLES:',
+    '1. Responde EXCLUSIVAMENTE con un objeto JSON válido. SIN texto antes ni después del JSON.',
+    '2. NO uses bloques markdown (```), NO escribas explicaciones fuera del JSON, NO saludes.',
+    '3. El JSON debe tener EXACTAMENTE dos campos:',
+    '   - "fixedSnippet": string → El fragmento de código corregido que reemplaza al vulnerable.',
+    '   - "explanation": string → Explicación técnica breve de la corrección aplicada.',
+    '4. El "fixedSnippet" debe ser un reemplazo drop-in exacto del fragmento vulnerable.',
+    '5. Aplica las mejores prácticas de seguridad (OWASP, CWE) para la corrección.',
+    '',
+    'Ejemplo de respuesta CORRECTA:',
+    '{"fixedSnippet": "elemento.textContent = userInput;", "explanation": "Se reemplazó innerHTML por textContent para prevenir XSS (CWE-79)."}',
+    '',
+    'Ejemplo de respuesta INCORRECTA (NUNCA hagas esto):',
+    'Aquí tienes la corrección: ```json {"fixedSnippet": ...} ```',
+  ].join('\n');
+
+  /**
+   * Construye el prompt de usuario con los datos de la vulnerabilidad.
+   * Las instrucciones de formato van en el system prompt, aquí solo van los datos.
    */
   public generatePrompt(vulnerability: Vulnerability, sourceCode: string): string {
     return [
-      `Eres un asistente experto en seguridad de código para la herramienta VulX.`,
-      `Se ha detectado la siguiente vulnerabilidad en el código fuente:`,
+      `Vulnerabilidad detectada:`,
       `- Regla ID: ${vulnerability.id}`,
       `- Nombre: ${vulnerability.name}`,
       `- Severidad: ${vulnerability.severity}`,
       `- Línea: ${vulnerability.line}`,
       `- Descripción: ${vulnerability.description}`,
-      `- Fragmento vulnerable:`,
-      `\`\`\``,
+      `- Recomendación de la regla: ${vulnerability.recommendation}`,
+      ``,
+      `Fragmento de código vulnerable:`,
       vulnerability.codeSnippet,
-      `\`\`\``,
       ``,
-      `Contexto general del código (parcial):`,
-      `\`\`\``,
-      sourceCode.substring(0, 1000),
-      `\`\`\``,
+      `Contexto del archivo (primeros 1500 caracteres):`,
+      sourceCode.substring(0, 1500),
       ``,
-      `Instrucciones estrictas:`,
-      `1. Corrige la vulnerabilidad aplicando las mejores prácticas de seguridad recomendadas.`,
-      `2. Devuelve ÚNICAMENTE un objeto JSON válido con los campos "fixedSnippet" y "explanation".`,
-      `3. En "fixedSnippet" pon EXCLUSIVAMENTE el fragmento de código corregido que debe reemplazar exactamente al fragmento vulnerable (sin bloques de markdown adicionales ni explicaciones fuera del JSON).`,
-      `4. En "explanation" proporciona una explicación breve y técnica de la solución.`,
-      ``,
-      `Ejemplo de formato de respuesta JSON:`,
-      `{`,
-      `  "fixedSnippet": "elemento.textContent = userInput;",`,
-      `  "explanation": "Se reemplazó innerHTML por textContent para evitar inyección de scripts (XSS).",`,
-      `}`
+      `Corrige la vulnerabilidad y responde con el JSON.`,
     ].join('\n');
   }
 
@@ -272,8 +284,10 @@ export class AIService {
 
   /**
    * Invoca el motor de inferencia local de Ollama con un timeout seguro.
+   * Envía el system prompt separado del prompt de usuario para máxima adherencia al formato JSON.
    */
   private async queryInferenceEngine(prompt: string): Promise<string> {
+    // Si hay un proveedor de inferencia personalizado (tests/mocks), usarlo directamente
     if (this.inferenceProvider) {
       return this.inferenceProvider(prompt);
     }
@@ -285,27 +299,44 @@ export class AIService {
       const response = await fetch(`${this.ollamaUrl}/api/generate`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           model: this.model,
+          system: this.SYSTEM_PROMPT,
           prompt,
           stream: false,
-          format: 'json'
+          format: 'json',
+          options: {
+            temperature: 0.2,
+            num_predict: 1024,
+          },
         }),
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       if (!response.ok) {
-        throw new Error(`Ollama respondió con código HTTP ${response.status}`);
+        const body = await response.text().catch(() => '(no body)');
+        throw new Error(
+          `Ollama respondió con HTTP ${response.status}: ${body.substring(0, 200)}`
+        );
       }
 
       const data = (await response.json()) as { response?: string };
-      if (!data.response) {
+      if (!data.response || data.response.trim().length === 0) {
         throw new Error('Respuesta vacía recibida de Ollama');
       }
 
       return data.response;
+    } catch (err) {
+      // Re-lanzar para que el caller (remediate) active el fallback heurístico
+      const message = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted) {
+        throw new Error(
+          `Ollama timeout tras ${this.timeoutMs}ms. ¿El modelo ${this.model} está cargado?`
+        );
+      }
+      throw new Error(`Error conectando con Ollama (${this.ollamaUrl}): ${message}`);
     } finally {
       clearTimeout(timeout);
     }
@@ -348,8 +379,12 @@ export class AIService {
       const prompt = this.generatePrompt(vulnerability, sourceCode);
       const rawResponse = await this.queryInferenceEngine(prompt);
       payload = this.parseAIResponse(rawResponse, vulnerability);
-    } catch {
+    } catch (err) {
       // Si la IA no está disponible o da timeout, aplicar remediación heurística determinística
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[VulX/AIService] Fallback heurístico activado para ${vulnerability.id}: ${reason}`
+      );
       payload = this.getHeuristicRemediation(vulnerability);
     }
 
