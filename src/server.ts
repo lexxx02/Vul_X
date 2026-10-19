@@ -175,7 +175,7 @@ import { fileURLToPath } from 'node:url';
 const isDirectRun =
   process.argv[1] &&
   fileURLToPath(import.meta.url).replace(/\\/g, '/').toLowerCase() ===
-    process.argv[1].replace(/\\/g, '/').toLowerCase();
+  process.argv[1].replace(/\\/g, '/').toLowerCase();
 
 if (isDirectRun) {
   start();
