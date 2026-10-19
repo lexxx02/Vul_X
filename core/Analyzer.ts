@@ -173,18 +173,14 @@ export class Analyzer {
     findings: Vulnerability[],
     sourceCode: string
   ): Promise<Vulnerability[]> {
-    const enriched: Vulnerability[] = [];
-
-    for (const finding of findings) {
-      if (finding.remediation) {
-        enriched.push(finding);
-      } else {
-        const remediated = await this.aiService.remediate(finding, sourceCode);
-        enriched.push(remediated);
-      }
-    }
-
-    return enriched;
+    return Promise.all(
+      findings.map(async (finding) => {
+        if (finding.remediation) {
+          return finding;
+        }
+        return this.aiService.remediate(finding, sourceCode);
+      })
+    );
   }
 
   /**

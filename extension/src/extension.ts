@@ -157,9 +157,51 @@ export function activate(context: vscode.ExtensionContext) {
 
             const edit = new vscode.WorkspaceEdit();
 
-            // Rango exacto a reemplazar: si la línea coincide, reemplazar la línea o el snippet
             const targetLine = document.lineAt(diagnostic.range.start.line);
-            edit.replace(document.uri, targetLine.range, matchingVuln.remediation.fixedSnippet);
+            const lineText = targetLine.text;
+            const indent = lineText.match(/^\s*/)?.[0] || '';
+
+            // Caso especial para secretos hardcodeados (el snippet viene enmascarado con asteriscos)
+            if (matchingVuln.id === 'HARDCODED_SECRET') {
+              const quoteMatch = lineText.match(/(["'])(?:(?!\1).){8,}\1/);
+              if (quoteMatch && typeof quoteMatch.index === 'number') {
+                const quoteRange = new vscode.Range(
+                  new vscode.Position(diagnostic.range.start.line, quoteMatch.index),
+                  new vscode.Position(diagnostic.range.start.line, quoteMatch.index + quoteMatch[0].length)
+                );
+                edit.replace(document.uri, quoteRange, matchingVuln.remediation.fixedSnippet);
+                fix.edit = edit;
+                actions.push(fix);
+                continue;
+              }
+            }
+
+            // 1. Si el fragmento vulnerable exacto existe dentro de la línea y el reemplazo es de una sola línea:
+            const snippetIdx = lineText.indexOf(matchingVuln.codeSnippet);
+            if (
+              snippetIdx !== -1 &&
+              !matchingVuln.remediation.fixedSnippet.includes('\n')
+            ) {
+              const snippetRange = new vscode.Range(
+                new vscode.Position(diagnostic.range.start.line, snippetIdx),
+                new vscode.Position(
+                  diagnostic.range.start.line,
+                  snippetIdx + matchingVuln.codeSnippet.length
+                )
+              );
+              edit.replace(
+                document.uri,
+                snippetRange,
+                matchingVuln.remediation.fixedSnippet
+              );
+            } else {
+              // 2. Si reemplaza la línea completa, respetar la indentación original
+              const indented = matchingVuln.remediation.fixedSnippet
+                .split(/\r?\n/)
+                .map((l) => (l.trim().length > 0 ? `${indent}${l.trim()}` : ''))
+                .join('\n');
+              edit.replace(document.uri, targetLine.range, indented);
+            }
 
             fix.edit = edit;
             actions.push(fix);
@@ -247,11 +289,12 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
 
     for (const vuln of vulnerabilities) {
       // Líneas en VS Code son 0-indexed, en VulX son 1-indexed
-      const lineIndex = Math.max(0, vuln.line - 1);
+      const lineIndex = Math.min(Math.max(0, vuln.line - 1), Math.max(0, document.lineCount - 1));
       const docLine = document.lineCount > lineIndex ? document.lineAt(lineIndex) : null;
 
-      const startCol = vuln.column >= 0 ? vuln.column : 0;
-      const endCol = docLine ? docLine.range.end.character : startCol + (vuln.codeSnippet.length || 10);
+      const lineEnd = docLine ? docLine.range.end.character : 100;
+      const startCol = Math.max(0, Math.min(vuln.column >= 0 ? vuln.column : 0, lineEnd));
+      const endCol = Math.max(startCol + 1, lineEnd);
 
       const range = new vscode.Range(
         new vscode.Position(lineIndex, startCol),
