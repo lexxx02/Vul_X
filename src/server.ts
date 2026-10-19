@@ -40,9 +40,11 @@ const analyzeBodySchema = {
     code: { type: 'string', minLength: 1 },
     language: { type: 'string' },
     filePath: { type: 'string' },
-    includeRemediation: { type: 'boolean', default: true }
+    includeRemediation: { type: 'boolean', default: true },
+    deepScan: { type: 'boolean', default: false }
   }
 };
+
 
 const analyzeResponseSchema = {
   200: {
@@ -108,16 +110,17 @@ interface AnalyzeBody {
   language?: string;
   filePath?: string;
   includeRemediation?: boolean;
+  deepScan?: boolean;
 }
 
 const analyzeHandler = async (
   request: FastifyRequest<{ Body: AnalyzeBody }>,
   reply: FastifyReply
 ) => {
-  const { code, language, filePath, includeRemediation } = request.body;
+  const { code, language, filePath, includeRemediation, deepScan } = request.body;
 
   server.log.info(
-    { language: language || 'auto', filePath },
+    { language: language || 'auto', filePath, deepScan: !!deepScan },
     'Ejecutando análisis híbrido (AST + IA) con Analyzer'
   );
 
@@ -127,7 +130,9 @@ const analyzeHandler = async (
     language,
     filePath,
     includeRemediation,
+    deepScan,
   });
+
 
   server.log.info(
     { total: result.summary.total, durationMs: result.summary.durationMs },

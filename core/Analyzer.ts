@@ -14,14 +14,19 @@ export interface AnalyzeRequest {
   /** Código fuente a analizar */
   code: string;
   /** Lenguaje del archivo (js, ts, javascript, typescript). Se auto-detecta si se omite. */
-  language?: string;
+  language?: string | undefined;
   /** Ruta del archivo original (ayuda a inferir el lenguaje) */
-  filePath?: string;
+  filePath?: string | undefined;
   /**
    * Si es `true` (por defecto), cada hallazgo se enriquece con la remediación de la IA.
    * Si es `false`, se devuelven solo los hallazgos crudos del RuleEngine.
    */
-  includeRemediation?: boolean;
+  includeRemediation?: boolean | undefined;
+  /**
+   * Si es `true`, ejecuta además una auditoría semántica profunda con IA (AI Deep Scan)
+   * para detectar vulnerabilidades lógicas o complejas que escapan al análisis sintáctico.
+   */
+  deepScan?: boolean | undefined;
 }
 
 /** Conteo de vulnerabilidades por severidad */
@@ -61,6 +66,11 @@ export interface AnalysisResult {
  *   ▼
  * ┌─────────────────────────────────┐
  * │  2. RuleEngine (reglas AST)     │  → Vulnerability[] crudos
+ * └─────────────────────────────────┘
+ *   │
+ *   ▼
+ * ┌─────────────────────────────────┐
+ * │  2.5. AI Deep Scan (opcional)   │  → Vulnerability[] semánticos
  * └─────────────────────────────────┘
  *   │
  *   ▼
@@ -108,13 +118,37 @@ export class Analyzer {
     // ── Paso 2: Ejecutar reglas estáticas del RuleEngine sobre el AST ──
     const rawFindings = this.ruleEngine.analyze(context);
 
+    // ── Paso 2.5: Si deepScan está activado, ejecutar auditoría semántica con IA ──
+    const combinedFindings = [...rawFindings];
+    if (request.deepScan) {
+      try {
+        const aiFindings = await this.aiService.auditCodeWithAI(code, language);
+        for (const aiVuln of aiFindings) {
+          // Deduplicar: si coincide con una línea ya reportada por el AST, priorizar el nodo AST
+          const isDuplicate = combinedFindings.some(
+            (existing) =>
+              existing.line === aiVuln.line ||
+              (existing.id === aiVuln.id && Math.abs(existing.line - aiVuln.line) <= 1)
+          );
+          if (!isDuplicate) {
+            combinedFindings.push(aiVuln);
+          }
+        }
+      } catch (err) {
+        console.warn(
+          '[VulX/Analyzer] Error en deepScan de IA, continuando con hallazgos AST:',
+          err
+        );
+      }
+    }
+
     // ── Paso 3: Enriquecer con IA (si hay hallazgos y se solicitó remediación) ──
     let enrichedFindings: Vulnerability[];
 
-    if (shouldRemediate && rawFindings.length > 0) {
-      enrichedFindings = await this.enrichWithAI(rawFindings, code);
+    if (shouldRemediate && combinedFindings.length > 0) {
+      enrichedFindings = await this.enrichWithAI(combinedFindings, code);
     } else {
-      enrichedFindings = rawFindings;
+      enrichedFindings = combinedFindings;
     }
 
     // ── Paso 4: Construir resumen estadístico ──
@@ -142,8 +176,12 @@ export class Analyzer {
     const enriched: Vulnerability[] = [];
 
     for (const finding of findings) {
-      const remediated = await this.aiService.remediate(finding, sourceCode);
-      enriched.push(remediated);
+      if (finding.remediation) {
+        enriched.push(finding);
+      } else {
+        const remediated = await this.aiService.remediate(finding, sourceCode);
+        enriched.push(remediated);
+      }
     }
 
     return enriched;
