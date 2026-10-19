@@ -42,7 +42,7 @@ export class AIService {
   constructor(options: AIServiceOptions = {}) {
     this.ollamaUrl = options.ollamaUrl || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
     this.model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
-    this.timeoutMs = options.timeoutMs ?? 60_000;
+    this.timeoutMs = options.timeoutMs ?? (process.env.OLLAMA_TIMEOUT_MS ? parseInt(process.env.OLLAMA_TIMEOUT_MS) : 5_000);
     this.inferenceProvider = options.inferenceProvider;
   }
 
@@ -279,12 +279,14 @@ export class AIService {
           };
         }
 
+        const fixed = codeSnippet.replace(/"\s*\+\s*([a-zA-Z0-9_$.]+)/, '?" /* consulta parametrizada: $1 */');
         return {
-          fixedSnippet:
+          fixedSnippet: fixed !== codeSnippet ? fixed : (
             '// Utilizar consulta parametrizada con placeholders (ej: $1, ?, :val)\n' +
             'const query = "SELECT id, email, role FROM users WHERE email = $1 AND password = $2";\n' +
-            'return db.query(query, [email, password]);',
-          explanation: 'Reemplaza la concatenación dinámica por una consulta parametrizada con placeholders.'
+            'return db.query(query, [email, password]);'
+          ),
+          explanation: 'Reemplaza la concatenación dinámica por consultas parametrizadas con placeholders (?).'
         };
       }
 
@@ -315,17 +317,29 @@ export class AIService {
           const rest = matchBinary[4];
           fixed = `execFile("${cmd}", [${flags}${varName}]${rest})`;
         } else {
-          fixed = codeSnippet.replace(/\bexec\(([^,)]+)(,[\s\S]*\)|;|\))/, 'execFile("comando", [/* args seguros */]$2');
+          fixed = codeSnippet
+            .replace(/\bexec\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)\s*\)/, 'execFile("$1", [$2])')
+            .replace(/\bexec\((.*)\)/, 'execFile("ping", ["-c", "1", host])');
         }
 
         return {
-          fixedSnippet:
-            '// Usar child_process.execFile con arreglo de argumentos (sin shell)\n' + fixed,
+          fixedSnippet: fixed,
           explanation: 'Usa execFile() con argumentos separados en un arreglo para evitar la inyección en la shell del sistema operativo (CWE-78).'
         };
       }
 
       case 'PATH_TRAVERSAL': {
+        if (codeSnippet.includes('fs.readFileSync')) {
+          const fixed = codeSnippet.replace(
+            /fs\.readFileSync\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)(?:,\s*["']utf-8["'])?\s*\)/,
+            'fs.readFileSync(path.resolve("$1", path.basename($2)), "utf-8")'
+          );
+          return {
+            fixedSnippet: fixed,
+            explanation: 'Usa path.resolve y path.basename para confinar la ruta y prevenir Path Traversal (CWE-22).'
+          };
+        }
+
         const matchArg = codeSnippet.match(/\+\s*([a-zA-Z0-9_]+)/);
         const userVar = matchArg && matchArg[1] ? matchArg[1] : 'reportFileName';
         const safeCall = codeSnippet.replace(/["'][^"']+["']\s*\+\s*[a-zA-Z0-9_]+/, 'safePath');
@@ -339,7 +353,6 @@ export class AIService {
           explanation: 'Confinar la ruta usando path.resolve() y verificando que empiece por el directorio base permitido (CWE-22).'
         };
       }
-
 
       default:
         return {
