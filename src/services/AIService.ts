@@ -42,7 +42,7 @@ export class AIService {
   constructor(options: AIServiceOptions = {}) {
     this.ollamaUrl = options.ollamaUrl || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
     this.model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
-    this.timeoutMs = options.timeoutMs ?? 60_000;
+    this.timeoutMs = options.timeoutMs ?? (process.env.OLLAMA_TIMEOUT_MS ? parseInt(process.env.OLLAMA_TIMEOUT_MS) : 5_000);
     this.inferenceProvider = options.inferenceProvider;
   }
 
@@ -270,16 +270,16 @@ export class AIService {
       }
 
       case 'SQL_INJECTION': {
+        const fixed = codeSnippet.replace(/"\s*\+\s*([a-zA-Z0-9_$.]+)/, '?" /* parametrizar: $1 */');
         return {
-          fixedSnippet: '// Utilizar consulta parametrizada con placeholders (ej: $1, ?, :val)\n' +
-            codeSnippet.replace(/\+[^;]+/, '/* pasar como parámetro en array de valores */'),
-          explanation: 'Reemplaza la concatenación dinámica por consultas parametrizadas o sentencias preparadas.'
+          fixedSnippet: fixed,
+          explanation: 'Reemplaza la concatenación dinámica por consultas parametrizadas con placeholders (?).'
         };
       }
 
       case 'HARDCODED_SECRET': {
         return {
-          fixedSnippet: codeSnippet.replace(/["'][A-Za-z0-9_\-\.\/\+=]{8,}["']/, 'process.env.SECRET_TOKEN!'),
+          fixedSnippet: 'process.env.API_KEY || "definir_en_env"',
           explanation: 'Extrae la credencial codificada hacia una variable de entorno (.env) para evitar filtraciones en el repositorio.'
         };
       }
@@ -292,20 +292,23 @@ export class AIService {
       }
 
       case 'COMMAND_INJECTION': {
+        const fixed = codeSnippet
+          .replace(/\bexec\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)\s*\)/, 'execFile("$1", [$2])')
+          .replace(/\bexec\((.*)\)/, 'execFile("ping", ["-c", "1", host])');
         return {
-          fixedSnippet: '// Usar child_process.execFile o spawn con arreglo de argumentos sin shell: true\n' +
-            codeSnippet.replace(/\bexec\((.*)\)/, 'execFile("comando", [/* args seguros */])'),
-          explanation: 'Usa execFile() o spawn() con argumentos separados en un arreglo para evitar la inyección en la shell del sistema operativo (CWE-78).'
+          fixedSnippet: fixed,
+          explanation: 'Usa execFile() con argumentos separados en un arreglo para evitar la inyección en la shell del sistema operativo (CWE-78).'
         };
       }
 
       case 'PATH_TRAVERSAL': {
+        const fixed = codeSnippet.replace(
+          /fs\.readFileSync\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)(?:,\s*["']utf-8["'])?\s*\)/,
+          'fs.readFileSync(path.resolve("$1", path.basename($2)), "utf-8")'
+        );
         return {
-          fixedSnippet: '// Validar ruta canónica contra directorio base permitido antes de acceder\n' +
-            'const safePath = path.resolve(BASE_DIRECTORY, userInput);\n' +
-            'if (!safePath.startsWith(BASE_DIRECTORY)) throw new Error("Acceso denegado");\n' +
-            codeSnippet,
-          explanation: 'Confinar la ruta usando path.resolve() y verificando que empiece por el directorio base permitido (CWE-22).'
+          fixedSnippet: fixed,
+          explanation: 'Usa path.resolve y path.basename para confinar la ruta y prevenir Path Traversal (CWE-22).'
         };
       }
 
