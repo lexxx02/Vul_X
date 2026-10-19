@@ -232,7 +232,16 @@ export class SQLiRule extends SecurityRule {
       return;
     }
 
-    // El argumento es dinámico (variable, expresión, template con interpolación)
+    // Si se proporciona un segundo argumento (ej: arreglo de parámetros [val1, val2] o variable de parámetros),
+    // se trata de una consulta parametrizada segura (Prepared Statement).
+    if (args.namedChildren.length >= 2) {
+      const secondArg = args.namedChildren[1];
+      if (secondArg && (secondArg.type === 'array' || secondArg.type === 'identifier')) {
+        return;
+      }
+    }
+
+    // El argumento es dinámico (variable, expresión, template con interpolación) sin parámetros separados
     vulnerabilities.push({
       id: this.id,
       name: this.name,
