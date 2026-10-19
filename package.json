@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "demo": "tsx scripts/demo-analyze.ts",
     "compile:extension": "npm --prefix extension run compile",
     "watch:extension": "npm --prefix extension run watch"
   },

@@ -180,4 +180,77 @@ describe('Server & Endpoints - Conexión de RuleEngine con /analyze', () => {
 
     assert.equal(response.statusCode, 400);
   });
+
+  it('POST /analyze debe detectar vulnerabilidades de Command Injection', async () => {
+    const payload = {
+      code: `
+        const { exec } = require('child_process');
+        function run(userCmd) {
+          exec("ping -c 1 " + userCmd);
+        }
+      `,
+      language: 'javascript'
+    };
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/analyze',
+      payload
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'success');
+    assert.ok(body.analysis.vulnerabilities.some((v: { id: string }) => v.id === 'COMMAND_INJECTION'));
+    assert.equal(body.analysis.summary.critical, 1);
+  });
+
+  it('POST /analyze debe detectar vulnerabilidades de Path Traversal', async () => {
+    const payload = {
+      code: `
+        const fs = require('fs');
+        function serveFile(name) {
+          return fs.readFileSync('/var/data/' + name, 'utf8');
+        }
+      `,
+      language: 'javascript'
+    };
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/analyze',
+      payload
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'success');
+    assert.ok(body.analysis.vulnerabilities.some((v: { id: string }) => v.id === 'PATH_TRAVERSAL'));
+    assert.equal(body.analysis.summary.high, 1);
+  });
+
+  it('POST /analyze con deepScan: true debe responder 200 y procesar el pipeline sin errores', async () => {
+    const payload = {
+      code: `
+        const a = 1;
+        const b = 2;
+        console.log(a + b);
+      `,
+      language: 'javascript',
+      deepScan: true
+    };
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/analyze',
+      payload
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'success');
+    assert.ok(body.analysis);
+    assert.ok(Array.isArray(body.analysis.vulnerabilities));
+  });
 });
+

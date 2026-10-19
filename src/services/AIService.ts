@@ -71,6 +71,23 @@ export class AIService {
   ].join('\n');
 
   /**
+   * System prompt para auditoría semántica de código completo (AI Deep Scan).
+   */
+  private readonly AUDIT_SYSTEM_PROMPT = [
+    'Eres un auditor de seguridad de código de élite para la herramienta SAST "VulX".',
+    'Tu tarea es analizar el código fuente suministrado e identificar vulnerabilidades de seguridad reales (OWASP Top 10, CWE).',
+    'Debes buscar problemas como: Inyección de Comandos, SSRF, Path Traversal, Insecure Deserialization, Prototype Pollution, Broken Access Control, Weak Cryptography, Open Redirect, etc.',
+    '',
+    'REGLAS OBLIGATORIAS:',
+    '1. Responde ÚNICAMENTE con un arreglo JSON de objetos: [{"id": string, "name": string, "description": string, "severity": "critical"|"high"|"medium"|"low", "line": number, "column": number, "codeSnippet": string, "recommendation": string, "fixedSnippet": string, "explanation": string}].',
+    '2. Si el código no presenta vulnerabilidades, responde exactamente: []',
+    '3. NO incluyas markdown (```), NO escribas texto fuera del arreglo JSON.',
+    '4. La línea debe corresponder al número de línea aproximado en el código fuente (1-indexed).',
+    '5. "fixedSnippet" debe ser la corrección segura del "codeSnippet".',
+  ].join('\n');
+
+
+  /**
    * Construye el prompt de usuario con los datos de la vulnerabilidad.
    * Las instrucciones de formato van en el system prompt, aquí solo van los datos.
    */
@@ -274,6 +291,25 @@ export class AIService {
         };
       }
 
+      case 'COMMAND_INJECTION': {
+        return {
+          fixedSnippet: '// Usar child_process.execFile o spawn con arreglo de argumentos sin shell: true\n' +
+            codeSnippet.replace(/\bexec\((.*)\)/, 'execFile("comando", [/* args seguros */])'),
+          explanation: 'Usa execFile() o spawn() con argumentos separados en un arreglo para evitar la inyección en la shell del sistema operativo (CWE-78).'
+        };
+      }
+
+      case 'PATH_TRAVERSAL': {
+        return {
+          fixedSnippet: '// Validar ruta canónica contra directorio base permitido antes de acceder\n' +
+            'const safePath = path.resolve(BASE_DIRECTORY, userInput);\n' +
+            'if (!safePath.startsWith(BASE_DIRECTORY)) throw new Error("Acceso denegado");\n' +
+            codeSnippet,
+          explanation: 'Confinar la ruta usando path.resolve() y verificando que empiece por el directorio base permitido (CWE-22).'
+        };
+      }
+
+
       default:
         return {
           fixedSnippet: `/* Corrección sugerida */\n${codeSnippet}`,
@@ -286,7 +322,10 @@ export class AIService {
    * Invoca el motor de inferencia local de Ollama con un timeout seguro.
    * Envía el system prompt separado del prompt de usuario para máxima adherencia al formato JSON.
    */
-  private async queryInferenceEngine(prompt: string): Promise<string> {
+  private async queryInferenceEngine(
+    prompt: string,
+    customSystemPrompt?: string
+  ): Promise<string> {
     // Si hay un proveedor de inferencia personalizado (tests/mocks), usarlo directamente
     if (this.inferenceProvider) {
       return this.inferenceProvider(prompt);
@@ -303,7 +342,7 @@ export class AIService {
         },
         body: JSON.stringify({
           model: this.model,
-          system: this.SYSTEM_PROMPT,
+          system: customSystemPrompt || this.SYSTEM_PROMPT,
           prompt,
           stream: false,
           format: 'json',
@@ -419,4 +458,137 @@ export class AIService {
 
     return Promise.all(remediatedPromises);
   }
+
+  /**
+   * Realiza una auditoría semántica de seguridad directamente con la IA (AI Deep Scan).
+   * Identifica vulnerabilidades complejas o lógicas (SSRF, Insecure Deserialization,
+   * Prototype Pollution, Broken Access Control, Weak Cryptography, Open Redirect, etc.)
+   * que no están cubiertas por las reglas sintácticas del AST.
+   */
+  public async auditCodeWithAI(
+    sourceCode: string,
+    language: string = 'javascript'
+  ): Promise<Vulnerability[]> {
+    const prompt = [
+      `Audita el siguiente código fuente en lenguaje "${language}" en busca de vulnerabilidades de seguridad:`,
+      '```' + language,
+      sourceCode,
+      '```',
+      'Responde EXCLUSIVAMENTE con el arreglo JSON según las instrucciones del sistema.'
+    ].join('\n');
+
+    try {
+      const rawResponse = await this.queryInferenceEngine(
+        prompt,
+        this.AUDIT_SYSTEM_PROMPT
+      );
+      return this.parseAuditResponse(rawResponse, sourceCode);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(`[VulX/AIService] AI Deep Scan omitido o no disponible: ${reason}`);
+      return [];
+    }
+  }
+
+  /**
+   * Parsea la respuesta del AI Deep Scan y la convierte en objetos Vulnerability estandarizados.
+   */
+  public parseAuditResponse(
+    rawResponse: string,
+    sourceCode: string
+  ): Vulnerability[] {
+    let cleanJson = rawResponse.trim();
+
+    // Extraer bloque JSON si vino envuelto en ```json ... ```
+    const match = cleanJson.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (match && match[1]) {
+      cleanJson = match[1].trim();
+    }
+
+    // Buscar el primer '[' y último ']'
+    const startIdx = cleanJson.indexOf('[');
+    const endIdx = cleanJson.lastIndexOf(']');
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+      cleanJson = cleanJson.substring(startIdx, endIdx + 1);
+    }
+
+    try {
+      const parsed = JSON.parse(cleanJson);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      const findings: Vulnerability[] = [];
+      for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+
+        const id =
+          typeof item.id === 'string' && item.id.length > 0
+            ? item.id
+            : 'AI_DETECTED_VULNERABILITY';
+        const name =
+          typeof item.name === 'string' && item.name.length > 0
+            ? item.name
+            : 'Vulnerabilidad detectada por IA';
+        const description =
+          typeof item.description === 'string'
+            ? item.description
+            : 'Problema de seguridad identificado por modelo de IA.';
+        const severity: 'low' | 'medium' | 'high' | 'critical' = [
+          'low',
+          'medium',
+          'high',
+          'critical',
+        ].includes(item.severity)
+          ? item.severity
+          : 'medium';
+        const line =
+          typeof item.line === 'number' && item.line > 0 ? item.line : 1;
+        const column =
+          typeof item.column === 'number' && item.column >= 0
+            ? item.column
+            : 0;
+        const codeSnippet =
+          typeof item.codeSnippet === 'string' ? item.codeSnippet : '';
+        const recommendation =
+          typeof item.recommendation === 'string'
+            ? item.recommendation
+            : 'Revisa el código para corregir el fallo reportado.';
+
+        const vuln: Vulnerability = {
+          id,
+          name,
+          description,
+          severity,
+          line,
+          column,
+          codeSnippet,
+          recommendation,
+        };
+
+        if (
+          typeof item.fixedSnippet === 'string' &&
+          item.fixedSnippet.length > 0
+        ) {
+          vuln.remediation = this.formatRemediation(
+            vuln,
+            this.sanitizeCodeSnippet(item.fixedSnippet),
+            item.explanation || recommendation,
+            sourceCode
+          );
+        }
+
+        findings.push(vuln);
+      }
+
+      return findings;
+    } catch (parseErr) {
+      console.warn(
+        '[VulX/AIService] Error parseando respuesta de AI Deep Scan:',
+        parseErr
+      );
+      return [];
+    }
+  }
 }
+

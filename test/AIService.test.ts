@@ -235,4 +235,75 @@ Espero que ayude.
     const vuln = body.analysis.vulnerabilities[0];
     assert.equal(vuln.remediation, undefined);
   });
+
+  it('getHeuristicRemediation debe generar remediaciones para COMMAND_INJECTION y PATH_TRAVERSAL', () => {
+    const service = new AIService();
+
+    const cmdVuln: Vulnerability = {
+      id: 'COMMAND_INJECTION',
+      name: 'Inyección de comandos',
+      description: 'Llamada a exec() con comando dinámico',
+      severity: 'critical',
+      line: 3,
+      column: 2,
+      codeSnippet: 'exec("ping " + host)',
+      recommendation: 'Usar execFile'
+    };
+
+    const pathVuln: Vulnerability = {
+      id: 'PATH_TRAVERSAL',
+      name: 'Path Traversal',
+      description: 'Lectura de archivo con ruta no confinada',
+      severity: 'high',
+      line: 3,
+      column: 2,
+      codeSnippet: 'fs.readFileSync("/var/data/" + file)',
+      recommendation: 'Confinar ruta con path.resolve'
+    };
+
+    const cmdRemediation = service.getHeuristicRemediation(cmdVuln);
+    assert.ok(cmdRemediation.fixedSnippet.includes('execFile'));
+    assert.ok(cmdRemediation.explanation.includes('CWE-78'));
+
+    const pathRemediation = service.getHeuristicRemediation(pathVuln);
+    assert.ok(pathRemediation.fixedSnippet.includes('path.resolve'));
+    assert.ok(pathRemediation.explanation.includes('CWE-22'));
+  });
+
+  it('auditCodeWithAI debe parsear hallazgos semánticos provistos por el motor de inferencia', async () => {
+    const mockInference = async (_prompt: string): Promise<string> => {
+      return JSON.stringify([
+        {
+          id: 'SSRF',
+          name: 'Server-Side Request Forgery',
+          description: 'Petición HTTP a URL externa no validada',
+          severity: 'high',
+          line: 4,
+          column: 2,
+          codeSnippet: 'axios.get(req.query.url);',
+          recommendation: 'Validar URL contra lista blanca de dominios',
+          fixedSnippet: 'if (isAllowedUrl(req.query.url)) axios.get(req.query.url);',
+          explanation: 'Se añade validación contra lista blanca para mitigar SSRF.'
+        }
+      ]);
+    };
+
+    const service = new AIService({ inferenceProvider: mockInference });
+    const findings = await service.auditCodeWithAI('axios.get(req.query.url);', 'javascript');
+
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0]?.id, 'SSRF');
+    assert.equal(findings[0]?.severity, 'high');
+    assert.equal(findings[0]?.line, 4);
+    assert.ok(findings[0]?.remediation);
+    assert.ok(findings[0]?.remediation?.fixedSnippet.includes('isAllowedUrl'));
+  });
+
+  it('auditCodeWithAI debe retornar arreglo vacío si el modelo responde []', async () => {
+    const mockInference = async (_prompt: string): Promise<string> => '[]';
+    const service = new AIService({ inferenceProvider: mockInference });
+    const findings = await service.auditCodeWithAI('const a = 1;', 'javascript');
+    assert.deepEqual(findings, []);
+  });
 });
+

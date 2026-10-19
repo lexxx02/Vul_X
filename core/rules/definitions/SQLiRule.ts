@@ -194,16 +194,25 @@ export class SQLiRule extends SecurityRule {
     // Verificar si el nombre de la función coincide con funciones SQL
     // Manejar tanto llamadas directas como member expressions (db.query)
     let functionName = '';
+    let objectName = '';
     if (functionNode.type === 'member_expression') {
       const property = functionNode.childForFieldName('property');
+      const object = functionNode.childForFieldName('object');
       if (property) {
         functionName = property.text;
+      }
+      if (object) {
+        objectName = object.text;
       }
     } else if (functionNode.type === 'identifier') {
       functionName = functionNode.text;
     }
 
     if (!this.SQL_FUNCTION_PATTERN.test(functionName)) return;
+
+    // Excluir llamadas evidentes a child_process / cp o exec/run globales
+    if (objectName === 'child_process' || objectName === 'cp') return;
+    if (functionNode.type === 'identifier' && (functionName === 'exec' || functionName === 'run')) return;
 
     // Verificar los argumentos: si el primer argumento NO es un string
     // literal, podría ser una query construida dinámicamente.
@@ -217,11 +226,9 @@ export class SQLiRule extends SecurityRule {
     // inyección (a menos que contenga concatenación, ya detectada arriba).
     if (firstArg.type === 'string') return;
 
-    // Si es un template sin sustituciones, es seguro.
-    if (
-      firstArg.type === 'template_string' &&
-      !firstArg.children.some((c) => c.type === 'template_substitution')
-    ) {
+    // Las expresiones binarias (+) y template literals con SQL son evaluadas
+    // por checkBinaryConcatenation y checkTemplateLiteral respectivamente.
+    if (firstArg.type === 'binary_expression' || firstArg.type === 'template_string') {
       return;
     }
 

@@ -15,6 +15,8 @@ El MVP se centrará en detectar y explicar tres tipos críticos de vulnerabilida
 | **VULX-01** | Inyección SQL (SQLi) | CWE-89 | Detección de concatenación de cadenas en métodos de consulta a bases de datos. | Explicar el vector de ataque y sugerir el uso de consultas parametrizadas. |
 | **VULX-02** | Cross-Site Scripting (XSS) | CWE-79 | Identificación de asignaciones directas a `innerHTML` o manipulación insegura del DOM. | Demostrar cómo se inyectan los scripts y sugerir sanitización de entradas. |
 | **VULX-03** | Secretos Hardcodeados | CWE-798 | Uso de expresiones regulares y cálculo de entropía en asignaciones de variables (tokens, passwords). | Advertir sobre el riesgo de exposición en repositorios y sugerir el uso de variables de entorno (`.env`). |
+| **VULX-04** | Inyección de Comandos (OS Command Injection) | CWE-78 | Detección de comandos concatenados o interpolados en llamadas a `child_process` (`exec`, `spawn`). | Explicar riesgos de ejecución arbitraria en el host y sugerir `execFile` con argumentos separados. |
+| **VULX-05** | Recorrido de Rutas (Path Traversal) | CWE-22 | Detección de rutas dinámicas no confinadas en llamadas a APIs de `fs` y `path.join/resolve`. | Explicar vectores de fuga de archivos y sugerir resolución canónica con prefijo estricto. |
 
 ## 3. Especificación Técnica de Requerimientos
 
@@ -24,6 +26,7 @@ El MVP se centrará en detectar y explicar tres tipos críticos de vulnerabilida
 * **RF03 - Inferencia de IA:** La API debe estructurar un prompt con el fragmento vulnerable y consultar al servicio local de Ollama esperando una respuesta en formato JSON estricto.
 * **RF04 - Diagnósticos Visuales:** La extensión debe renderizar subrayados (squiggles) en las líneas de código afectadas y mostrar los detalles en el panel de Problemas.
 * **RF05 - Remediación Asistida:** La interfaz debe proporcionar una acción de código (Quick Fix) que permita al usuario reemplazar el código vulnerable por el parche sugerido por la IA con un solo clic.
+* **RF06 - Auditoría Semántica con IA (Deep Scan):** El backend debe soportar un modo de escaneo profundo con IA capaz de auditar código en busca de vulnerabilidades lógicas y semánticas complejas (SSRF, Broken Auth, Prototype Pollution, Weak Crypto).
 
 ### 3.2. Requerimientos No Funcionales (RNF)
 * **RNF01 - Latencia de Detección:** El análisis inicial mediante Tree-sitter debe completarse en menos de 100ms para no bloquear la experiencia de usuario.
