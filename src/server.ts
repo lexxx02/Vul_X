@@ -3,17 +3,20 @@ import Fastify, {
   type FastifyRequest,
   type FastifyReply
 } from 'fastify';
-import { createDefaultRuleEngine, type RuleEngine } from '../core/rules/index.js';
-import { createAnalysisContext } from '../core/parser.js';
-import { AIService } from './services/AIService.js';
+import { createAnalyzer, Analyzer } from '../core/Analyzer.js';
 
 
 export const server: FastifyInstance = Fastify({
   logger: process.env.NODE_ENV === 'test' ? false : true
 });
 
-export const ruleEngine: RuleEngine = createDefaultRuleEngine();
-export const aiService: AIService = new AIService();
+export const analyzer: Analyzer = createAnalyzer(
+  process.env.NODE_ENV === 'test' ? { timeoutMs: 3_000 } : undefined
+);
+
+// Accesores de compatibilidad (usados por /rules y tests existentes)
+export const ruleEngine = analyzer.getRuleEngine();
+export const aiService = analyzer.getAIService();
 
 // GET /health
 server.get('/health', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -90,7 +93,8 @@ const analyzeResponseSchema = {
               critical: { type: 'number' },
               high: { type: 'number' },
               medium: { type: 'number' },
-              low: { type: 'number' }
+              low: { type: 'number' },
+              durationMs: { type: 'number' }
             }
           }
         }
@@ -114,39 +118,29 @@ const analyzeHandler = async (
 
   server.log.info(
     { language: language || 'auto', filePath },
-    'Ejecutando análisis determinístico con RuleEngine y remediación con AIService'
+    'Ejecutando análisis híbrido (AST + IA) con Analyzer'
   );
 
-  // 1. Parsear el código con Tree-sitter y construir el AnalysisContext
-  const context = createAnalysisContext(code, language, filePath);
+  // Delegar el pipeline completo al Analyzer (Parser → RuleEngine → AIService)
+  const result = await analyzer.analyze({
+    code,
+    language,
+    filePath,
+    includeRemediation,
+  });
 
-  // 2. Ejecutar el RuleEngine con las reglas AST registradas
-  const rawVulnerabilities = ruleEngine.analyze(context);
-
-  // 3. Generar respuestas de remediación completas con AIService si está activo
-  const shouldRemediate = includeRemediation !== false;
-  const vulnerabilities = shouldRemediate && rawVulnerabilities.length > 0
-    ? await aiService.remediateAll(rawVulnerabilities, code)
-    : rawVulnerabilities;
-
-  const summary = {
-    total: vulnerabilities.length,
-    critical: vulnerabilities.filter((v) => v.severity === 'critical').length,
-    high: vulnerabilities.filter((v) => v.severity === 'high').length,
-    medium: vulnerabilities.filter((v) => v.severity === 'medium').length,
-    low: vulnerabilities.filter((v) => v.severity === 'low').length
-  };
+  server.log.info(
+    { total: result.summary.total, durationMs: result.summary.durationMs },
+    'Análisis completado'
+  );
 
   return reply.code(200).send({
     status: 'success',
     message:
-      vulnerabilities.length > 0
-        ? `Análisis completado: se detectaron ${vulnerabilities.length} vulnerabilidad(es)`
+      result.vulnerabilities.length > 0
+        ? `Análisis completado: se detectaron ${result.vulnerabilities.length} vulnerabilidad(es)`
         : 'Análisis completado: no se detectaron vulnerabilidades',
-    analysis: {
-      vulnerabilities,
-      summary
-    }
+    analysis: result,
   });
 };
 

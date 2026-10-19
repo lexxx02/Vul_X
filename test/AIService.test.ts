@@ -2,6 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { AIService } from '../src/services/AIService.js';
 import type { Vulnerability } from '../core/rules/SecurityRule.js';
+
+// Configurar entorno de pruebas antes de importar el servidor (usa timeout reducido para Ollama)
+process.env.NODE_ENV = 'test';
+
 import { server } from '../src/server.js';
 
 describe('AIService — Remediación y Generación de Diffs', () => {
@@ -29,10 +33,11 @@ function render(userInput) {
     const service = new AIService();
     const prompt = service.generatePrompt(dummyVuln, dummySource);
 
-    assert.ok(prompt.includes('DOM_XSS'));
-    assert.ok(prompt.includes('container.innerHTML = userInput;'));
-    assert.ok(prompt.includes('fixedSnippet'));
-    assert.ok(prompt.includes('explanation'));
+    // Datos de la vulnerabilidad presentes en el prompt de usuario
+    assert.ok(prompt.includes('DOM_XSS'), 'Debe incluir el ID de la regla');
+    assert.ok(prompt.includes('container.innerHTML = userInput;'), 'Debe incluir el snippet vulnerable');
+    assert.ok(prompt.includes('Usar textContent'), 'Debe incluir la recomendación de la regla');
+    assert.ok(prompt.includes('Corrige la vulnerabilidad'), 'Debe incluir la instrucción de cierre');
   });
 
   it('calculateReplacementRange debe calcular coordenadas precisas para snippets de una línea', () => {
