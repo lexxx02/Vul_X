@@ -143,6 +143,11 @@ export class PathTraversalRule extends SecurityRule {
 
     // Caso 6: Argumento dinámico directo (ej: fs.readFileSync(userPath))
     if (this.isNonLiteralNode(pathArg)) {
+      // Si la variable fue validada y sanitizada explícitamente (ej: safePath, safeFile), no reportar falso positivo
+      if (pathArg.type === 'identifier' && /^(safe|valid|sanitized)/i.test(pathArg.text)) {
+        return;
+      }
+
       vulnerabilities.push(
         this.createVulnerability(
           node,

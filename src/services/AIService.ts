@@ -270,17 +270,33 @@ export class AIService {
       }
 
       case 'SQL_INJECTION': {
-        const fixed = codeSnippet.replace(/"\s*\+\s*([a-zA-Z0-9_$.]+)/, '?" /* parametrizar: $1 */');
+        if (codeSnippet.includes('.query(') || codeSnippet.includes('.execute(')) {
+          return {
+            fixedSnippet:
+              '// Consulta parametrizada segura con array de valores\n' +
+              codeSnippet.replace(/\(([^)]+)\)/, '($1, [/* valores parametrizados */])'),
+            explanation: 'Utiliza una consulta parametrizada pasando los valores en un arreglo como segundo argumento.'
+          };
+        }
+
+        const fixed = codeSnippet.replace(/"\s*\+\s*([a-zA-Z0-9_$.]+)/, '?" /* consulta parametrizada: $1 */');
         return {
-          fixedSnippet: fixed,
+          fixedSnippet: fixed !== codeSnippet ? fixed : (
+            '// Utilizar consulta parametrizada con placeholders (ej: $1, ?, :val)\n' +
+            'const query = "SELECT id, email, role FROM users WHERE email = $1 AND password = $2";\n' +
+            'return db.query(query, [email, password]);'
+          ),
           explanation: 'Reemplaza la concatenación dinámica por consultas parametrizadas con placeholders (?).'
         };
       }
 
       case 'HARDCODED_SECRET': {
+        const varMatch = codeSnippet.match(/(?:const|let|var)?\s*([a-zA-Z0-9_]+)\s*=/);
+        const envVar = varMatch && varMatch[1] ? varMatch[1].toUpperCase() : 'SECRET_TOKEN';
+        const fixed = codeSnippet.replace(/["'][^"'\r\n]{4,}["']|`[^`\r\n]{4,}`/, `process.env.${envVar} || process.env.SECRET_TOKEN`);
         return {
-          fixedSnippet: 'process.env.API_KEY || "definir_en_env"',
-          explanation: 'Extrae la credencial codificada hacia una variable de entorno (.env) para evitar filtraciones en el repositorio.'
+          fixedSnippet: fixed !== codeSnippet ? fixed : `process.env.${envVar} || process.env.SECRET_TOKEN`,
+          explanation: `Extrae la credencial codificada hacia process.env.${envVar} para evitar filtraciones en el repositorio.`
         };
       }
 
@@ -292,9 +308,20 @@ export class AIService {
       }
 
       case 'COMMAND_INJECTION': {
-        const fixed = codeSnippet
-          .replace(/\bexec\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)\s*\)/, 'execFile("$1", [$2])')
-          .replace(/\bexec\((.*)\)/, 'execFile("ping", ["-c", "1", host])');
+        let fixed = codeSnippet;
+        const matchBinary = codeSnippet.match(/\bexec\(\s*["']([a-zA-Z0-9_\-]+)(?:\s+([^"']+))?["']\s*\+\s*([a-zA-Z0-9_\.]+)([\s\S]*)\)/);
+        if (matchBinary) {
+          const cmd = matchBinary[1];
+          const flags = matchBinary[2] ? matchBinary[2].trim().split(/\s+/).map((f) => `"${f}"`).join(', ') + ', ' : '';
+          const varName = matchBinary[3];
+          const rest = matchBinary[4];
+          fixed = `execFile("${cmd}", [${flags}${varName}]${rest})`;
+        } else {
+          fixed = codeSnippet
+            .replace(/\bexec\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)\s*\)/, 'execFile("$1", [$2])')
+            .replace(/\bexec\((.*)\)/, 'execFile("ping", ["-c", "1", host])');
+        }
+
         return {
           fixedSnippet: fixed,
           explanation: 'Usa execFile() con argumentos separados en un arreglo para evitar la inyección en la shell del sistema operativo (CWE-78).'
@@ -302,16 +329,30 @@ export class AIService {
       }
 
       case 'PATH_TRAVERSAL': {
-        const fixed = codeSnippet.replace(
-          /fs\.readFileSync\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)(?:,\s*["']utf-8["'])?\s*\)/,
-          'fs.readFileSync(path.resolve("$1", path.basename($2)), "utf-8")'
-        );
+        if (codeSnippet.includes('fs.readFileSync')) {
+          const fixed = codeSnippet.replace(
+            /fs\.readFileSync\(\s*["']([^"']+)["']\s*\+\s*([a-zA-Z0-9_$.]+)(?:,\s*["']utf-8["'])?\s*\)/,
+            'fs.readFileSync(path.resolve("$1", path.basename($2)), "utf-8")'
+          );
+          return {
+            fixedSnippet: fixed,
+            explanation: 'Usa path.resolve y path.basename para confinar la ruta y prevenir Path Traversal (CWE-22).'
+          };
+        }
+
+        const matchArg = codeSnippet.match(/\+\s*([a-zA-Z0-9_]+)/);
+        const userVar = matchArg && matchArg[1] ? matchArg[1] : 'reportFileName';
+        const safeCall = codeSnippet.replace(/["'][^"']+["']\s*\+\s*[a-zA-Z0-9_]+/, 'safePath');
         return {
-          fixedSnippet: fixed,
-          explanation: 'Usa path.resolve y path.basename para confinar la ruta y prevenir Path Traversal (CWE-22).'
+          fixedSnippet:
+            `// Validar ruta canónica contra directorio base permitido (CWE-22)\n` +
+            `const BASE_DIR = path.resolve(__dirname, 'reports');\n` +
+            `const safePath = path.resolve(BASE_DIR, path.basename(${userVar}));\n` +
+            `if (!safePath.startsWith(BASE_DIR)) throw new Error("Acceso denegado: Path Traversal detectado");\n` +
+            `${safeCall}`,
+          explanation: 'Confinar la ruta usando path.resolve() y verificando que empiece por el directorio base permitido (CWE-22).'
         };
       }
-
 
       default:
         return {

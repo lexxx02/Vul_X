@@ -311,23 +311,25 @@ export class SecretRule extends SecurityRule {
     // ─── Fase 1: Detección por patrones conocidos ───
     for (const secretPattern of this.SECRET_PATTERNS) {
       if (secretPattern.pattern.test(content)) {
-        // Evitar duplicados: no reportar si ya existe una vulnerabilidad
-        // en la misma línea con el mismo patrón.
+        // Evitar duplicados: no reportar si ya existe una vulnerabilidad en la misma línea
         const isDuplicate = vulnerabilities.some(
-          (v) =>
-            v.line === node.startPosition.row + 1 &&
-            v.name === `Secreto: ${secretPattern.name}`
+          (v) => v.line === node.startPosition.row + 1 && v.id === this.id
         );
 
         if (!isDuplicate) {
+          const statementNode =
+            node.parent && node.parent.type === 'variable_declarator' && node.parent.parent
+              ? node.parent.parent
+              : node;
+
           vulnerabilities.push({
             id: this.id,
             name: `Secreto: ${secretPattern.name}`,
             description: secretPattern.description,
             severity: this.severity,
-            line: node.startPosition.row + 1,
-            column: node.startPosition.column,
-            codeSnippet: this.maskSecret(node.text),
+            line: statementNode.startPosition.row + 1,
+            column: statementNode.startPosition.column,
+            codeSnippet: statementNode.text,
             recommendation:
               'Mueve este secreto a una variable de entorno (.env) o a un gestor de ' +
               'secretos como AWS Secrets Manager, HashiCorp Vault o Azure Key Vault. ' +
@@ -347,7 +349,16 @@ export class SecretRule extends SecurityRule {
 
       if (entropy >= this.ENTROPY_THRESHOLD) {
         // Verificar que no sea un string común (URL, path, etc.)
-        if (!this.isCommonString(cleanContent)) {
+        const isDuplicate = vulnerabilities.some(
+          (v) => v.line === node.startPosition.row + 1 && v.id === this.id
+        );
+
+        if (!isDuplicate && !this.isCommonString(cleanContent)) {
+          const statementNode =
+            node.parent && node.parent.type === 'variable_declarator' && node.parent.parent
+              ? node.parent.parent
+              : node;
+
           vulnerabilities.push({
             id: this.id,
             name: 'Posible secreto (alta entropía)',
@@ -356,9 +367,9 @@ export class SecretRule extends SecurityRule {
               `(umbral: ${this.ENTROPY_THRESHOLD}). Los strings con alta aleatoriedad ` +
               'suelen ser tokens, hashes o claves generadas automáticamente.',
             severity: 'medium',
-            line: node.startPosition.row + 1,
-            column: node.startPosition.column,
-            codeSnippet: this.maskSecret(node.text),
+            line: statementNode.startPosition.row + 1,
+            column: statementNode.startPosition.column,
+            codeSnippet: statementNode.text,
             recommendation:
               'Si este string es un secreto o token, muévelo a una variable de entorno. ' +
               'Si es un valor legítimo (hash, salt, etc.), considera marcarlo con un ' +
@@ -430,6 +441,12 @@ export class SecretRule extends SecurityRule {
       );
 
       if (!isDuplicate) {
+        const statementNode =
+          node.parent &&
+          (node.parent.type === 'lexical_declaration' || node.parent.type === 'variable_declaration')
+            ? node.parent
+            : node;
+
         vulnerabilities.push({
           id: this.id,
           name: 'Credencial en asignación',
@@ -438,9 +455,9 @@ export class SecretRule extends SecurityRule {
             'y se le asigna un valor literal. Las credenciales hardcodeadas son un ' +
             'vector de ataque común cuando el código fuente se expone.',
           severity: this.severity,
-          line: node.startPosition.row + 1,
-          column: node.startPosition.column,
-          codeSnippet: this.maskSecret(node.text),
+          line: statementNode.startPosition.row + 1,
+          column: statementNode.startPosition.column,
+          codeSnippet: statementNode.text,
           recommendation:
             `Usa una variable de entorno: process.env.${nameNode.text.toUpperCase()} ` +
             'en lugar de codificar el valor directamente. Ejemplo: ' +
