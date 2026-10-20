@@ -28,3 +28,13 @@ const AWS_ACCESS_KEY = "AKIA1234567890ABCDEF";
 function pingHost(host) {
   exec("ping -c 1 " + host);
 }
+
+// 6. Variante VULX-02 (CWE-79): Manipulación Insegura del DOM con document.write
+function renderBanner(htmlSnippet) {
+  document.write(htmlSnippet);
+}
+
+// 7. Variante VULX-04 (CWE-78): Inyección de Comandos mediante Template Literals
+function compressDirectory(folderName) {
+  exec(`tar -czf backup.tar.gz ${folderName}`);
+}
