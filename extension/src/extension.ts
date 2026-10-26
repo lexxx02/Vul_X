@@ -3,9 +3,7 @@ import * as vscode from 'vscode';
 // Canal de salida dedicado para los logs de VulX en la consola del IDE
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
-
-// URL base del backend de análisis VulX
-const VULX_API_URL = process.env.VULX_API_URL || 'http://127.0.0.1:3000';
+let statusBarItem: vscode.StatusBarItem;
 
 interface RemediationPayload {
   explanation: string;
@@ -31,6 +29,28 @@ interface VulnerabilityResponse {
   remediation?: RemediationPayload;
 }
 
+interface VulxConfig {
+  apiUrl: string;
+  enableOnSave: boolean;
+  analysisTrigger: 'both' | 'onSave' | 'onDemand';
+  deepScan: boolean;
+  showNotifications: boolean;
+}
+
+/**
+ * Obtiene la configuración activa de VulX desde los ajustes de VS Code / Antigravity
+ */
+function getVulxConfig(): VulxConfig {
+  const config = vscode.workspace.getConfiguration('vulx');
+  return {
+    apiUrl: config.get<string>('apiUrl') || process.env.VULX_API_URL || 'http://127.0.0.1:3000',
+    enableOnSave: config.get<boolean>('enableOnSave', true),
+    analysisTrigger: config.get<'both' | 'onSave' | 'onDemand'>('analysisTrigger', 'both'),
+    deepScan: config.get<boolean>('deepScan', false),
+    showNotifications: config.get<boolean>('showNotifications', true),
+  };
+}
+
 // Almacenamiento en memoria de hallazgos por documento para Quick Fixes
 const documentVulnerabilities = new Map<string, VulnerabilityResponse[]>();
 
@@ -42,7 +62,15 @@ export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('VulX Security');
   diagnosticCollection = vscode.languages.createDiagnosticCollection('vulx');
 
-  outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [VulX] Extensión activada con éxito.`);
+  // Inicializar elemento en la barra de estado (Status Bar Item)
+  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBarItem.command = 'vulx.analyzeCurrentFile';
+  statusBarItem.text = '$(shield) VulX: Listo';
+  statusBarItem.tooltip = 'VulX Security: Clic para analizar archivo activo bajo demanda (Ctrl+Alt+A / Alt+Shift+V)';
+  statusBarItem.show();
+
+  outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [VulX] Extensión activada con éxito en el editor.`);
+  outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Triggers] onSave: ${getVulxConfig().enableOnSave ? 'habilitado' : 'deshabilitado'} | Modo: ${getVulxConfig().analysisTrigger}`);
 
   const supportedLanguages = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'];
 
@@ -53,7 +81,18 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(msg);
   });
 
-  // 2. Comando para leer el buffer del editor activo
+  // 2. Comando para alternar trigger onSave (On / Off bajo demanda)
+  const toggleOnSaveCmd = vscode.commands.registerCommand('vulx.toggleOnSave', async () => {
+    const config = vscode.workspace.getConfiguration('vulx');
+    const current = config.get<boolean>('enableOnSave', true);
+    await config.update('enableOnSave', !current, vscode.ConfigurationTarget.Global);
+    const estado = !current ? 'ACTIVADO' : 'DESACTIVADO';
+    const msg = `🛡️ VulX: Análisis automático al guardar ${estado}.`;
+    outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Config] ${msg}`);
+    vscode.window.showInformationMessage(msg);
+  });
+
+  // 3. Comando para leer el buffer del editor activo
   const readBufferCmd = vscode.commands.registerCommand('vulx.readBuffer', () => {
     const editor = vscode.window.activeTextEditor;
 
@@ -91,40 +130,55 @@ export function activate(context: vscode.ExtensionContext) {
     });
   });
 
-  // 3. Comando para analizar activamente el archivo actual conectando a la API
+  // 4. Comando para analizar activamente el archivo actual (Trigger Bajo Demanda)
   const analyzeCurrentFileCmd = vscode.commands.registerCommand('vulx.analyzeCurrentFile', async () => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-      vscode.window.showWarningMessage('VulX: Abre un archivo para escanear.');
+      vscode.window.showWarningMessage('VulX: Abre un archivo JavaScript o TypeScript para analizarlo bajo demanda.');
       return;
     }
-    await analyzeDocument(editor.document);
+    outputChannel.appendLine(
+      `[${new Date().toLocaleTimeString()}] [Trigger onDemand] Solicitud de escaneo manual iniciada para ${editor.document.fileName}`
+    );
+    await analyzeDocument(editor.document, 'onDemand');
   });
 
-  // 4. Comando para limpiar diagnósticos
+  // 5. Comando para limpiar diagnósticos y resetear status bar
   const clearDiagnosticsCmd = vscode.commands.registerCommand('vulx.clearDiagnostics', () => {
     diagnosticCollection.clear();
     documentVulnerabilities.clear();
+    if (statusBarItem) {
+      statusBarItem.text = '$(shield) VulX: Listo';
+      statusBarItem.tooltip = 'VulX Security: Clic para analizar archivo activo bajo demanda (Ctrl+Alt+A / Alt+Shift+V)';
+    }
     vscode.window.showInformationMessage('VulX: Diagnósticos de seguridad limpiados.');
   });
 
-  // 5. Ciclo de vida: Listener de guardado de documentos (Auto-intercepción y análisis en tiempo real - RF01 + RF04)
+  // 6. Ciclo de vida: Listener de guardado de documentos (Trigger al guardar archivo - onSave)
   const onSaveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
     if (supportedLanguages.includes(document.languageId)) {
+      const { enableOnSave, analysisTrigger } = getVulxConfig();
+      if (!enableOnSave || analysisTrigger === 'onDemand') {
+        outputChannel.appendLine(
+          `[${new Date().toLocaleTimeString()}] [Auto-Intercepción] Archivo guardado: ${document.fileName}. Análisis omitido (trigger onSave desactivado en configuración).`
+        );
+        return;
+      }
+
       outputChannel.appendLine(
-        `[${new Date().toLocaleTimeString()}] [Auto-Intercepción] Archivo guardado: ${document.fileName} (${document.languageId}). Analizando con VulX...`
+        `[${new Date().toLocaleTimeString()}] [Trigger onSave] Archivo guardado: ${document.fileName} (${document.languageId}). Analizando con VulX...`
       );
-      await analyzeDocument(document);
+      await analyzeDocument(document, 'onSave');
     }
   });
 
-  // 6. Limpiar diagnósticos al cerrar un archivo
+  // 7. Limpiar diagnósticos al cerrar un archivo
   const onCloseListener = vscode.workspace.onDidCloseTextDocument((document) => {
     diagnosticCollection.delete(document.uri);
     documentVulnerabilities.delete(document.uri.toString());
   });
 
-  // 7. Proveedor de Quick Fix (Remediación Asistida - RF05)
+  // 8. Proveedor de Quick Fix (Remediación Asistida - RF05)
   const codeActionProvider = vscode.languages.registerCodeActionsProvider(
     supportedLanguages.map((lang) => ({ language: lang })),
     {
@@ -220,7 +274,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     outputChannel,
     diagnosticCollection,
+    statusBarItem,
     helloWorldCmd,
+    toggleOnSaveCmd,
     readBufferCmd,
     analyzeCurrentFileCmd,
     clearDiagnosticsCmd,
@@ -232,8 +288,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 /**
  * Envía el contenido del documento a la API /analyze y renderiza los diagnósticos (squiggles)
+ * Soporta ejecución tanto automática (trigger onSave) como manual (trigger onDemand).
  */
-async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
+async function analyzeDocument(
+  document: vscode.TextDocument,
+  triggerSource: 'onSave' | 'onDemand' = 'onDemand'
+): Promise<void> {
   const supportedLanguages = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'];
   if (!supportedLanguages.includes(document.languageId)) {
     return;
@@ -242,13 +302,25 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
   const code = document.getText();
   if (!code || code.trim().length === 0) {
     diagnosticCollection.delete(document.uri);
+    if (statusBarItem) {
+      statusBarItem.text = '$(shield) VulX: Listo';
+    }
     return;
   }
 
-  outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Escaneo] Enviando ${document.fileName} a ${VULX_API_URL}/analyze...`);
+  const config = getVulxConfig();
+
+  if (statusBarItem) {
+    statusBarItem.text = '$(sync~spin) VulX: Analizando...';
+    statusBarItem.tooltip = `VulX: Analizando ${document.fileName} (${triggerSource})...`;
+  }
+
+  outputChannel.appendLine(
+    `[${new Date().toLocaleTimeString()}] [${triggerSource.toUpperCase()}] Enviando ${document.fileName} a ${config.apiUrl}/analyze (DeepScan: ${config.deepScan})...`
+  );
 
   try {
-    const response = await fetch(`${VULX_API_URL}/analyze`, {
+    const response = await fetch(`${config.apiUrl}/analyze`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -257,6 +329,7 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
         code,
         language: document.languageId.includes('typescript') ? 'typescript' : 'javascript',
         filePath: document.fileName,
+        deepScan: config.deepScan,
         includeRemediation: true,
       }),
     });
@@ -264,6 +337,9 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
     if (!response.ok) {
       const errText = await response.text();
       outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Error HTTP ${response.status}] ${errText}`);
+      if (statusBarItem) {
+        statusBarItem.text = '$(error) VulX: Error HTTP';
+      }
       return;
     }
 
@@ -323,21 +399,38 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
     diagnosticCollection.set(document.uri, diagnostics);
 
     outputChannel.appendLine(
-      `[${new Date().toLocaleTimeString()}] [Escaneo Completado] ${vulnerabilities.length} vulnerabilidad(es) detectada(s) en ${data.analysis?.summary.durationMs ?? 0}ms.`
+      `[${new Date().toLocaleTimeString()}] [${triggerSource.toUpperCase()} Completado] ${vulnerabilities.length} vulnerabilidad(es) detectada(s) en ${data.analysis?.summary.durationMs ?? 0}ms.`
     );
 
-    if (vulnerabilities.length > 0) {
-      vscode.window.showWarningMessage(
-        `🛡️ VulX detectó ${vulnerabilities.length} vulnerabilidad(es) de seguridad en el archivo. Revisa el panel de Problemas (Ctrl+Shift+M).`
-      );
-    } else {
-      vscode.window.showInformationMessage('🛡️ VulX: No se detectaron vulnerabilidades en el archivo analizado.');
+    // Actualizar elemento en la barra de estado
+    if (statusBarItem) {
+      if (vulnerabilities.length > 0) {
+        statusBarItem.text = `$(alert) VulX: ${vulnerabilities.length} alerta(s)`;
+        statusBarItem.tooltip = `VulX: ${vulnerabilities.length} vulnerabilidad(es) en ${document.fileName} (Trigger: ${triggerSource}). Clic para re-analizar.`;
+      } else {
+        statusBarItem.text = '$(check) VulX: Seguro';
+        statusBarItem.tooltip = `VulX: Sin vulnerabilidades en ${document.fileName} (Trigger: ${triggerSource}). Clic para re-analizar.`;
+      }
+    }
+
+    if (config.showNotifications) {
+      if (vulnerabilities.length > 0) {
+        vscode.window.showWarningMessage(
+          `🛡️ VulX detectó ${vulnerabilities.length} vulnerabilidad(es) de seguridad [${triggerSource}]. Revisa el panel de Problemas (Ctrl+Shift+M).`
+        );
+      } else if (triggerSource === 'onDemand') {
+        vscode.window.showInformationMessage('🛡️ VulX: No se detectaron vulnerabilidades en el archivo analizado.');
+      }
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Error Conexión API] ${errorMsg}`);
+    if (statusBarItem) {
+      statusBarItem.text = '$(error) VulX: Sin conexión';
+      statusBarItem.tooltip = `VulX: No se pudo conectar con el servidor en ${config.apiUrl}`;
+    }
     vscode.window.showErrorMessage(
-      'VulX: No se pudo conectar con el servidor local en http://127.0.0.1:3000. Asegúrate de ejecutar "npm run dev" en la terminal de Vul_X.'
+      `VulX: No se pudo conectar con el servidor local en ${config.apiUrl}. Asegúrate de ejecutar "npm run dev" en la terminal de Vul_X.`
     );
   }
 }
@@ -353,5 +446,8 @@ export function deactivate() {
   if (diagnosticCollection) {
     diagnosticCollection.clear();
     diagnosticCollection.dispose();
+  }
+  if (statusBarItem) {
+    statusBarItem.dispose();
   }
 }

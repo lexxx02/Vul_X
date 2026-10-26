@@ -4,7 +4,8 @@
 // ============================================================================
 
 const fs = require('fs');
-const { exec } = require('child_process');
+const path = require('path');
+const { exec, execFile } = require('child_process');
 
 
 // 1. HARDCODED SECRET (CWE-798)

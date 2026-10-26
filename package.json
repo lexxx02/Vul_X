@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "demo": "tsx scripts/demo-analyze.ts",
     "compile:extension": "npm --prefix extension run compile",
-    "watch:extension": "npm --prefix extension run watch"
+    "watch:extension": "npm --prefix extension run watch",
+    "package:extension": "npm --prefix extension run package",
+    "verify:triggers": "tsx scripts/verify-triggers.ts"
   },
   "repository": {
     "type": "git",
