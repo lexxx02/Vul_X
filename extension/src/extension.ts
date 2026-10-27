@@ -5,6 +5,15 @@ let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBarItem: vscode.StatusBarItem;
 
+// Decoration types para resaltado visual de líneas vulnerables (line highlights por severidad)
+let criticalLineDecoration: vscode.TextEditorDecorationType;
+let highLineDecoration: vscode.TextEditorDecorationType;
+let mediumLineDecoration: vscode.TextEditorDecorationType;
+let lowLineDecoration: vscode.TextEditorDecorationType;
+
+// Timeout máximo para la respuesta de la API (30s)
+const VULX_FETCH_TIMEOUT_MS = 30_000;
+
 interface RemediationPayload {
   explanation: string;
   fixedSnippet: string;
@@ -62,6 +71,45 @@ export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('VulX Security');
   diagnosticCollection = vscode.languages.createDiagnosticCollection('vulx');
 
+  // ── Inicializar decoration types para resaltado de líneas vulnerables (line highlights) ──
+  // Cada severidad recibe un color de borde izquierdo, fondo translúcido y marcador en el overview ruler
+  criticalLineDecoration = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(220, 38, 38, 0.10)',
+    isWholeLine: true,
+    overviewRulerColor: '#dc2626',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    borderWidth: '0 0 0 3px',
+    borderStyle: 'solid',
+    borderColor: '#dc2626',
+  });
+  highLineDecoration = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(234, 88, 12, 0.10)',
+    isWholeLine: true,
+    overviewRulerColor: '#ea580c',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    borderWidth: '0 0 0 3px',
+    borderStyle: 'solid',
+    borderColor: '#ea580c',
+  });
+  mediumLineDecoration = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(202, 138, 4, 0.10)',
+    isWholeLine: true,
+    overviewRulerColor: '#ca8a04',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    borderWidth: '0 0 0 3px',
+    borderStyle: 'solid',
+    borderColor: '#ca8a04',
+  });
+  lowLineDecoration = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(37, 99, 235, 0.08)',
+    isWholeLine: true,
+    overviewRulerColor: '#2563eb',
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    borderWidth: '0 0 0 3px',
+    borderStyle: 'solid',
+    borderColor: '#2563eb',
+  });
+
   // Inicializar elemento en la barra de estado (Status Bar Item)
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = 'vulx.analyzeCurrentFile';
@@ -70,7 +118,9 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.show();
 
   outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [VulX] Extensión activada con éxito en el editor.`);
-  outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Triggers] onSave: ${getVulxConfig().enableOnSave ? 'habilitado' : 'deshabilitado'} | Modo: ${getVulxConfig().analysisTrigger}`);
+  outputChannel.appendLine(
+    `[${new Date().toLocaleTimeString()}] [Triggers] onSave: ${getVulxConfig().enableOnSave ? 'habilitado' : 'deshabilitado'} | Modo: ${getVulxConfig().analysisTrigger}`
+  );
 
   const supportedLanguages = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'];
 
@@ -140,13 +190,25 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine(
       `[${new Date().toLocaleTimeString()}] [Trigger onDemand] Solicitud de escaneo manual iniciada para ${editor.document.fileName}`
     );
-    await analyzeDocument(editor.document, 'onDemand');
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '🛡️ VulX: Analizando vulnerabilidades…',
+        cancellable: false,
+      },
+      () => analyzeDocument(editor.document, 'onDemand')
+    );
   });
 
-  // 5. Comando para limpiar diagnósticos y resetear status bar
+  // 5. Comando para limpiar diagnósticos y decoraciones
   const clearDiagnosticsCmd = vscode.commands.registerCommand('vulx.clearDiagnostics', () => {
     diagnosticCollection.clear();
     documentVulnerabilities.clear();
+    // Limpiar decoraciones de resaltado de línea en el editor activo
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) {
+      clearLineHighlights(activeEditor);
+    }
     if (statusBarItem) {
       statusBarItem.text = '$(shield) VulX: Listo';
       statusBarItem.tooltip = 'VulX Security: Clic para analizar archivo activo bajo demanda (Ctrl+Alt+A / Alt+Shift+V)';
@@ -217,7 +279,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             // Caso especial para secretos hardcodeados (el snippet viene enmascarado con asteriscos)
             if (matchingVuln.id === 'HARDCODED_SECRET') {
-              const quoteMatch = lineText.match(/(["'])(?:(?!\1).){8,}\1/);
+              const quoteMatch = lineText.match(/(['"])(?:(?!\1).){8,}\1/);
               if (quoteMatch && typeof quoteMatch.index === 'number') {
                 const quoteRange = new vscode.Range(
                   new vscode.Position(diagnostic.range.start.line, quoteMatch.index),
@@ -270,11 +332,22 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // 9. Re-aplicar decoraciones de línea al cambiar de editor activo
+  const onEditorChangeListener = vscode.window.onDidChangeActiveTextEditor((editor) => {
+    if (editor) {
+      applyLineHighlights(editor);
+    }
+  });
+
   // Registrar todos los disposables
   context.subscriptions.push(
     outputChannel,
     diagnosticCollection,
     statusBarItem,
+    criticalLineDecoration,
+    highLineDecoration,
+    mediumLineDecoration,
+    lowLineDecoration,
     helloWorldCmd,
     toggleOnSaveCmd,
     readBufferCmd,
@@ -282,13 +355,23 @@ export function activate(context: vscode.ExtensionContext) {
     clearDiagnosticsCmd,
     onSaveListener,
     onCloseListener,
+    onEditorChangeListener,
     codeActionProvider
   );
 }
 
 /**
  * Envía el contenido del documento a la API /analyze y renderiza los diagnósticos (squiggles)
+ * junto con decoraciones de resaltado de línea (line highlights) por severidad.
  * Soporta ejecución tanto automática (trigger onSave) como manual (trigger onDemand).
+ *
+ * Flujo completo del cliente HTTP:
+ *   1. Construir payload con código, lenguaje y ruta (incluyendo deepScan configurable)
+ *   2. Enviar POST a /analyze con timeout via AbortController
+ *   3. Parsear respuesta JSON con lista de vulnerabilidades
+ *   4. Crear DiagnosticCollection con rangos, severidades y mensajes
+ *   5. Aplicar decoraciones de línea (line highlights) al editor activo
+ *   6. Actualizar status bar con resumen de hallazgos
  */
 async function analyzeDocument(
   document: vscode.TextDocument,
@@ -319,6 +402,10 @@ async function analyzeDocument(
     `[${new Date().toLocaleTimeString()}] [${triggerSource.toUpperCase()}] Enviando ${document.fileName} a ${config.apiUrl}/analyze (DeepScan: ${config.deepScan})...`
   );
 
+  // Cliente HTTP con AbortController para timeout configurable (evita bloqueos por Ollama lento)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), VULX_FETCH_TIMEOUT_MS);
+
   try {
     const response = await fetch(`${config.apiUrl}/analyze`, {
       method: 'POST',
@@ -332,7 +419,10 @@ async function analyzeDocument(
         deepScan: config.deepScan,
         includeRemediation: true,
       }),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errText = await response.text();
@@ -361,6 +451,7 @@ async function analyzeDocument(
     const vulnerabilities = data.analysis?.vulnerabilities || [];
     documentVulnerabilities.set(document.uri.toString(), vulnerabilities);
 
+    // ── Construir diagnósticos: mapear posiciones VulX (1-indexed) → VS Code (0-indexed) ──
     const diagnostics: vscode.Diagnostic[] = [];
 
     for (const vuln of vulnerabilities) {
@@ -377,6 +468,7 @@ async function analyzeDocument(
         new vscode.Position(lineIndex, endCol)
       );
 
+      // Mapeo de severidad VulX → DiagnosticSeverity de VS Code
       let severity = vscode.DiagnosticSeverity.Error;
       if (vuln.severity === 'medium') {
         severity = vscode.DiagnosticSeverity.Warning;
@@ -396,7 +488,14 @@ async function analyzeDocument(
       diagnostics.push(diagnostic);
     }
 
+    // Publicar diagnósticos en la colección (renderiza squiggles + panel de Problemas)
     diagnosticCollection.set(document.uri, diagnostics);
+
+    // ── Aplicar resaltado visual de líneas (line highlights) en el editor activo ──
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor && activeEditor.document.uri.toString() === document.uri.toString()) {
+      applyLineHighlights(activeEditor);
+    }
 
     outputChannel.appendLine(
       `[${new Date().toLocaleTimeString()}] [${triggerSource.toUpperCase()} Completado] ${vulnerabilities.length} vulnerabilidad(es) detectada(s) en ${data.analysis?.summary.durationMs ?? 0}ms.`
@@ -424,15 +523,88 @@ async function analyzeDocument(
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Error Conexión API] ${errorMsg}`);
-    if (statusBarItem) {
-      statusBarItem.text = '$(error) VulX: Sin conexión';
-      statusBarItem.tooltip = `VulX: No se pudo conectar con el servidor en ${config.apiUrl}`;
-    }
-    vscode.window.showErrorMessage(
-      `VulX: No se pudo conectar con el servidor local en ${config.apiUrl}. Asegúrate de ejecutar "npm run dev" en la terminal de Vul_X.`
+    const isTimeout = err instanceof Error && err.name === 'AbortError';
+
+    outputChannel.appendLine(
+      `[${new Date().toLocaleTimeString()}] [Error ${isTimeout ? 'Timeout' : 'Conexión'} API] ${errorMsg}`
     );
+
+    if (statusBarItem) {
+      statusBarItem.text = `$(error) VulX: ${isTimeout ? 'Timeout' : 'Sin conexión'}`;
+      statusBarItem.tooltip = `VulX: ${isTimeout ? 'Excedió tiempo de espera (30s)' : 'No se pudo conectar con el servidor en ' + config.apiUrl}`;
+    }
+
+    if (isTimeout) {
+      vscode.window.showErrorMessage(
+        `VulX: El análisis excedió el tiempo límite de ${VULX_FETCH_TIMEOUT_MS / 1000}s. Verifica que el servidor de análisis y Ollama estén respondiendo.`
+      );
+    } else {
+      vscode.window.showErrorMessage(
+        `VulX: No se pudo conectar con el servidor local en ${config.apiUrl}. Asegúrate de ejecutar "npm run dev" en la terminal de Vul_X.`
+      );
+    }
   }
+}
+
+/**
+ * Aplica decoraciones de resaltado de línea (line highlights) en el editor,
+ * agrupando las vulnerabilidades almacenadas por severidad para ofrecer
+ * retroalimentación visual inmediata sobre las líneas afectadas.
+ *
+ * Cada severidad utiliza un color diferente:
+ *   - Critical: rojo (#dc2626)
+ *   - High:     naranja (#ea580c)
+ *   - Medium:   amarillo (#ca8a04)
+ *   - Low:      azul (#2563eb)
+ */
+function applyLineHighlights(editor: vscode.TextEditor): void {
+  const vulns = documentVulnerabilities.get(editor.document.uri.toString()) || [];
+
+  const criticalRanges: vscode.DecorationOptions[] = [];
+  const highRanges: vscode.DecorationOptions[] = [];
+  const mediumRanges: vscode.DecorationOptions[] = [];
+  const lowRanges: vscode.DecorationOptions[] = [];
+
+  for (const vuln of vulns) {
+    const lineIndex = Math.min(Math.max(0, vuln.line - 1), Math.max(0, editor.document.lineCount - 1));
+    const line = editor.document.lineAt(lineIndex);
+    const decoration: vscode.DecorationOptions = {
+      range: line.range,
+      hoverMessage: new vscode.MarkdownString(
+        `**🛡️ VulX — ${vuln.name}** (\`${vuln.severity.toUpperCase()}\`)\n\n${vuln.description}\n\n💡 *${vuln.recommendation}*`
+      ),
+    };
+
+    switch (vuln.severity) {
+      case 'critical':
+        criticalRanges.push(decoration);
+        break;
+      case 'high':
+        highRanges.push(decoration);
+        break;
+      case 'medium':
+        mediumRanges.push(decoration);
+        break;
+      case 'low':
+        lowRanges.push(decoration);
+        break;
+    }
+  }
+
+  editor.setDecorations(criticalLineDecoration, criticalRanges);
+  editor.setDecorations(highLineDecoration, highRanges);
+  editor.setDecorations(mediumLineDecoration, mediumRanges);
+  editor.setDecorations(lowLineDecoration, lowRanges);
+}
+
+/**
+ * Limpia todas las decoraciones de resaltado de línea del editor dado.
+ */
+function clearLineHighlights(editor: vscode.TextEditor): void {
+  editor.setDecorations(criticalLineDecoration, []);
+  editor.setDecorations(highLineDecoration, []);
+  editor.setDecorations(mediumLineDecoration, []);
+  editor.setDecorations(lowLineDecoration, []);
 }
 
 /**
@@ -447,6 +619,11 @@ export function deactivate() {
     diagnosticCollection.clear();
     diagnosticCollection.dispose();
   }
+  // Limpiar decoraciones de línea y status bar
+  criticalLineDecoration?.dispose();
+  highLineDecoration?.dispose();
+  mediumLineDecoration?.dispose();
+  lowLineDecoration?.dispose();
   if (statusBarItem) {
     statusBarItem.dispose();
   }
