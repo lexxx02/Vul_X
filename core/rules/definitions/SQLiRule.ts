@@ -103,21 +103,36 @@ export class SQLiRule extends SecurityRule {
     // Solo nos interesan concatenaciones con '+'
     if (!operator || operator.text !== '+') return;
 
+    // Si el nodo padre ya es una concatenación (+), este nodo es una sub-expresión.
+    // Solo evaluamos la expresión binaria raíz (completa) para evitar reportar duplicados por cada operador '+'.
+    if (
+      node.parent &&
+      node.parent.type === 'binary_expression' &&
+      node.parent.childForFieldName('operator')?.text === '+'
+    ) {
+      return;
+    }
+
     const left = node.childForFieldName('left');
     const right = node.childForFieldName('right');
 
     if (!left || !right) return;
 
-    // Verificar si alguno de los operandos contiene palabras clave SQL
+    // Verificar si el texto completo contiene palabras clave SQL
     const fullText = node.text;
     if (!this.SQL_KEYWORD_PATTERN.test(fullText)) return;
 
-    // Verificar que hay al menos un operando no-literal (una variable,
-    // llamada a función, etc.) — eso es lo que lo hace peligroso.
+    // Verificar que hay al menos un operando no-literal dinámico
     const hasNonLiteral =
-      this.isNonLiteralNode(left) || this.isNonLiteralNode(right);
+      this.containsNonLiteral(left) || this.containsNonLiteral(right);
 
     if (hasNonLiteral) {
+      // Evitar reportar múltiples vulnerabilidades en la misma línea
+      const isDuplicate = vulnerabilities.some(
+        (v) => v.line === node.startPosition.row + 1 && v.id === this.id
+      );
+      if (isDuplicate) return;
+
       vulnerabilities.push({
         id: this.id,
         name: this.name,
@@ -134,6 +149,18 @@ export class SQLiRule extends SecurityRule {
           'Ejemplo: db.query("SELECT * FROM users WHERE id = $1", [userId])',
       });
     }
+  }
+
+  /**
+   * Verifica recursivamente si un nodo o sub-árbol contiene algún elemento dinámico no literal
+   */
+  private containsNonLiteral(node: SyntaxNode): boolean {
+    if (node.type === 'binary_expression') {
+      const left = node.childForFieldName('left');
+      const right = node.childForFieldName('right');
+      return (left ? this.containsNonLiteral(left) : false) || (right ? this.containsNonLiteral(right) : false);
+    }
+    return this.isNonLiteralNode(node);
   }
 
   /**

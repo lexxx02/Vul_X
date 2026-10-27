@@ -22,11 +22,17 @@
     "commands": [
       {
         "command": "vulx.analyzeCurrentFile",
-        "title": "VulX: Analizar archivo activo (Detección y Squiggles)"
+        "title": "VulX: Analizar archivo activo (Bajo demanda)",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "vulx.toggleOnSave",
+        "title": "VulX: Alternar análisis automático al guardar"
       },
       {
         "command": "vulx.clearDiagnostics",
-        "title": "VulX: Limpiar diagnósticos de seguridad"
+        "title": "VulX: Limpiar diagnósticos de seguridad",
+        "icon": "$(clear-all)"
       },
       {
         "command": "vulx.helloWorld",
@@ -40,12 +46,90 @@
         "command": "vulx.scanCurrentFile",
         "title": "VulX: Preparar payload de escaneo (Buffer activo)"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "vulx.analyzeCurrentFile",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "vulx.analyzeCurrentFile",
+        "key": "alt+shift+v",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vulx.analyzeCurrentFile",
+          "group": "vulx_group@1",
+          "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
+        },
+        {
+          "command": "vulx.toggleOnSave",
+          "group": "vulx_group@2"
+        },
+        {
+          "command": "vulx.clearDiagnostics",
+          "group": "vulx_group@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "vulx.analyzeCurrentFile",
+          "group": "navigation",
+          "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VulX Security Analyzer",
+      "properties": {
+        "vulx.enableOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ejecutar análisis automático de vulnerabilidades al guardar archivos (Trigger onSave)."
+        },
+        "vulx.analysisTrigger": {
+          "type": "string",
+          "enum": [
+            "both",
+            "onSave",
+            "onDemand"
+          ],
+          "enumDescriptions": [
+            "Activar tanto al guardar archivo como bajo demanda manual",
+            "Solo activar automáticamente al guardar el archivo",
+            "Solo activar manualmente bajo demanda (atajo, menú o barra de estado)"
+          ],
+          "default": "both",
+          "description": "Modo de activación del análisis de vulnerabilidades."
+        },
+        "vulx.apiUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3000",
+          "description": "URL base del servicio REST local de VulX."
+        },
+        "vulx.deepScan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Habilitar escaneo semántico profundo con IA local (Deep Scan)."
+        },
+        "vulx.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mostrar notificaciones emergentes con el resultado del análisis."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "npx --yes @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

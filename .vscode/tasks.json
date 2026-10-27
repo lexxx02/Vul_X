@@ -13,6 +13,44 @@
         "kind": "build",
         "isDefault": true
       }
+    },
+    {
+      "label": "empaquetar-extension-vsix",
+      "type": "shell",
+      "command": "npm run package",
+      "options": {
+        "cwd": "${workspaceFolder}/extension"
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "iniciar-servidor-vulx",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "analizar-muestra-bajo-demanda",
+      "type": "shell",
+      "command": "npm run demo",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "verificar-triggers-compatibilidad",
+      "type": "shell",
+      "command": "npm run verify:triggers",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
     }
   ]
 }

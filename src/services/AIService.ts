@@ -279,13 +279,22 @@ export class AIService {
           };
         }
 
-        const fixed = codeSnippet.replace(/"\s*\+\s*([a-zA-Z0-9_$.]+)/, '?" /* consulta parametrizada: $1 */');
+        // Si es una concatenación de cadenas SQL con variables (ej: "SELECT ... WHERE email = '" + email + "'...")
+        if (codeSnippet.includes('+')) {
+          let placeholderIdx = 1;
+          let cleaned = codeSnippet.replace(/['"]\s*\+\s*([a-zA-Z0-9_$.]+)\s*\+\s*['"]/g, () => `$${placeholderIdx++}`);
+          cleaned = cleaned.replace(/['"]\s*\+\s*([a-zA-Z0-9_$.]+)/g, () => `$${placeholderIdx++}`);
+          cleaned = cleaned.replace(/\+\s*['"]$/g, '');
+          cleaned = cleaned.replace(/['"]\$(\d+)['"]/g, '$$$1');
+
+          return {
+            fixedSnippet: cleaned,
+            explanation: 'Reemplaza la concatenación dinámica por consulta parametrizada con placeholders ($1, $2).'
+          };
+        }
+
         return {
-          fixedSnippet: fixed !== codeSnippet ? fixed : (
-            '// Utilizar consulta parametrizada con placeholders (ej: $1, ?, :val)\n' +
-            'const query = "SELECT id, email, role FROM users WHERE email = $1 AND password = $2";\n' +
-            'return db.query(query, [email, password]);'
-          ),
+          fixedSnippet: '"SELECT id, email, role FROM users WHERE email = $1 AND password = $2"',
           explanation: 'Reemplaza la concatenación dinámica por consultas parametrizadas con placeholders (?).'
         };
       }
@@ -293,9 +302,8 @@ export class AIService {
       case 'HARDCODED_SECRET': {
         const varMatch = codeSnippet.match(/(?:const|let|var)?\s*([a-zA-Z0-9_]+)\s*=/);
         const envVar = varMatch && varMatch[1] ? varMatch[1].toUpperCase() : 'SECRET_TOKEN';
-        const fixed = codeSnippet.replace(/["'][^"'\r\n]{4,}["']|`[^`\r\n]{4,}`/, `process.env.${envVar} || process.env.SECRET_TOKEN`);
         return {
-          fixedSnippet: fixed !== codeSnippet ? fixed : `process.env.${envVar} || process.env.SECRET_TOKEN`,
+          fixedSnippet: `process.env.${envVar} || process.env.SECRET_TOKEN`,
           explanation: `Extrae la credencial codificada hacia process.env.${envVar} para evitar filtraciones en el repositorio.`
         };
       }

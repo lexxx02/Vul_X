@@ -123,7 +123,7 @@ export class PathTraversalRule extends SecurityRule {
       if (isPathJoinOrResolve) {
         const pathCallArgs = pathArg.childForFieldName('arguments');
         if (pathCallArgs) {
-          // Verificar si algún argumento de path.join no es un literal simple ni __dirname/process.cwd()
+          // Verificar si algún argumento de path.join no es un literal simple ni __dirname/process.cwd() ni path.basename()
           const hasDynamicArg = pathCallArgs.namedChildren.some(
             (arg) => this.isDynamicPathSegment(arg)
           );
@@ -135,9 +135,9 @@ export class PathTraversalRule extends SecurityRule {
                   'path.join() resuelve secuencias relativas ("../"), permitiendo escapar del directorio raíz si la entrada no se valida contra una ruta permitida.'
               )
             );
-            return;
           }
         }
+        return;
       }
     }
 
@@ -184,13 +184,24 @@ export class PathTraversalRule extends SecurityRule {
     ) {
       return false;
     }
-    // Constantes comunes que son seguras
+    // Constantes comunes o variables sanitizadas que son seguras
     if (node.type === 'identifier') {
       if (node.text === '__dirname' || node.text === '__filename') return false;
+      if (/^(safe|valid|sanitized)/i.test(node.text)) return false;
     }
     if (node.type === 'call_expression') {
       const fn = node.childForFieldName('function');
-      if (fn && fn.text === 'process.cwd') return false;
+      if (fn) {
+        if (fn.text === 'process.cwd') return false;
+        // path.basename() extrae únicamente el nombre del archivo neutralizando secuencias '../'
+        if (
+          fn.text === 'path.basename' ||
+          fn.text === 'basename' ||
+          (fn.type === 'member_expression' && fn.childForFieldName('property')?.text === 'basename')
+        ) {
+          return false;
+        }
+      }
     }
     return true;
   }
