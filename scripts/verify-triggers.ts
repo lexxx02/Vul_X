@@ -200,7 +200,7 @@ async function runVerification() {
     'compatibility',
     hasVsix,
     0,
-    hasVsix ? `Archivo: ${vsixFiles[0]} (${(fs.statSync(path.resolve(extensionDir, vsixFiles[0])).size / 1024).toFixed(1)} KB)` : 'Falta empaquetar .vsix'
+    hasVsix ? `Archivo: ${vsixFiles[0]} (${(fs.statSync(path.resolve(extensionDir, vsixFiles[0]!)).size / 1024).toFixed(1)} KB)` : 'Falta empaquetar .vsix'
   );
 
   // 3.3 Manifest extension/package.json

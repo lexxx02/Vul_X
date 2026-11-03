@@ -1,4 +1,8 @@
 import * as vscode from 'vscode';
+import {
+  VulxCodeActionProvider,
+  type VulnerabilityResponse,
+} from './VulxCodeActionProvider';
 
 // Canal de salida dedicado para los logs de VulX en la consola del IDE
 let outputChannel: vscode.OutputChannel;
@@ -13,30 +17,6 @@ let lowLineDecoration: vscode.TextEditorDecorationType;
 
 // Timeout máximo para la respuesta de la API (30s)
 const VULX_FETCH_TIMEOUT_MS = 30_000;
-
-interface RemediationPayload {
-  explanation: string;
-  fixedSnippet: string;
-  diff: string;
-  replacementRange?: {
-    startLine: number;
-    endLine: number;
-    startColumn: number;
-    endColumn: number;
-  };
-}
-
-interface VulnerabilityResponse {
-  id: string;
-  name: string;
-  description: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  line: number;
-  column: number;
-  codeSnippet: string;
-  recommendation: string;
-  remediation?: RemediationPayload;
-}
 
 interface VulxConfig {
   apiUrl: string;
@@ -241,94 +221,126 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   // 8. Proveedor de Quick Fix (Remediación Asistida - RF05)
+  // Instanciar la clase VulxCodeActionProvider dedicada con inyección de dependencias
+  const vulxCodeActionProvider = new VulxCodeActionProvider(
+    documentVulnerabilities,
+    outputChannel
+  );
+
   const codeActionProvider = vscode.languages.registerCodeActionsProvider(
     supportedLanguages.map((lang) => ({ language: lang })),
+    vulxCodeActionProvider,
     {
-      provideCodeActions(document, range, context) {
-        const vulxDiagnostics = context.diagnostics.filter(
-          (d) => d.source === 'VulX' && d.code
+      providedCodeActionKinds: VulxCodeActionProvider.providedCodeActionKinds,
+    }
+  );
+
+  // 8b. Comando programático para aplicar el parche de una vulnerabilidad específica
+  //     Uso: vscode.commands.executeCommand('vulx.applyFix', vulnId, lineNumber)
+  const applyFixCmd = vscode.commands.registerCommand(
+    'vulx.applyFix',
+    async (vulnId?: string, lineNumber?: number) => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('VulX: No hay editor activo para aplicar la corrección.');
+        return;
+      }
+
+      const docUri = editor.document.uri.toString();
+      const vulns = documentVulnerabilities.get(docUri) || [];
+
+      if (vulns.length === 0) {
+        vscode.window.showInformationMessage('VulX: No hay vulnerabilidades detectadas en este archivo.');
+        return;
+      }
+
+      // Si se proporcionan vulnId y lineNumber, buscar la vulnerabilidad específica
+      let targetVuln: VulnerabilityResponse | undefined;
+      if (vulnId && lineNumber !== undefined) {
+        targetVuln = vulns.find(
+          (v) => v.id === vulnId && Math.abs(v.line - lineNumber) <= 1
+        );
+      }
+
+      // Si no se encontró por parámetros, mostrar QuickPick para selección manual
+      if (!targetVuln) {
+        const fixableVulns = vulns.filter((v) => v.remediation?.fixedSnippet);
+        if (fixableVulns.length === 0) {
+          vscode.window.showInformationMessage(
+            'VulX: Ninguna vulnerabilidad tiene parche de remediación disponible.'
+          );
+          return;
+        }
+
+        const selected = await vscode.window.showQuickPick(
+          fixableVulns.map((v) => ({
+            label: `$(alert) ${v.name}`,
+            description: `Línea ${v.line} — ${v.severity.toUpperCase()}`,
+            detail: v.remediation?.explanation || v.recommendation,
+            vuln: v,
+          })),
+          {
+            placeHolder: 'Selecciona la vulnerabilidad a corregir',
+            title: '🛡️ VulX: Aplicar corrección de seguridad',
+          }
         );
 
-        if (vulxDiagnostics.length === 0) {
-          return [];
+        if (!selected) {
+          return;
         }
+        targetVuln = selected.vuln;
+      }
 
-        const vulns = documentVulnerabilities.get(document.uri.toString()) || [];
-        const actions: vscode.CodeAction[] = [];
+      if (!targetVuln?.remediation?.fixedSnippet) {
+        vscode.window.showWarningMessage(
+          `VulX: No hay parche disponible para ${targetVuln?.name || vulnId}.`
+        );
+        return;
+      }
 
-        for (const diagnostic of vulxDiagnostics) {
-          const matchingVuln = vulns.find(
-            (v) =>
-              v.id === diagnostic.code &&
-              Math.abs(v.line - 1 - diagnostic.range.start.line) <= 1
+      // Buscar el diagnóstico asociado para disparar el Quick Fix
+      const diagnostics = diagnosticCollection.get(editor.document.uri) || [];
+      const matchDiag = diagnostics.find(
+        (d) =>
+          d.code === targetVuln!.id &&
+          Math.abs((targetVuln!.line - 1) - d.range.start.line) <= 1
+      );
+
+      if (!matchDiag) {
+        vscode.window.showWarningMessage(
+          'VulX: No se encontró el diagnóstico asociado para aplicar la corrección.'
+        );
+        return;
+      }
+
+      // Construir y aplicar el WorkspaceEdit a través del provider
+      const fakeContext: vscode.CodeActionContext = {
+        diagnostics: [matchDiag],
+        triggerKind: vscode.CodeActionTriggerKind.Invoke,
+        only: vscode.CodeActionKind.QuickFix,
+      };
+
+      const actions = vulxCodeActionProvider.provideCodeActions(
+        editor.document,
+        matchDiag.range,
+        fakeContext,
+        new vscode.CancellationTokenSource().token
+      );
+
+      if (actions.length > 0 && actions[0].edit) {
+        const applied = await vscode.workspace.applyEdit(actions[0].edit);
+        if (applied) {
+          outputChannel.appendLine(
+            `[${new Date().toLocaleTimeString()}] [ApplyFix] Corrección aplicada: ${targetVuln.id} en L${targetVuln.line}`
           );
+          vscode.window.showInformationMessage(
+            `🛡️ VulX: Corrección aplicada para "${targetVuln.name}" en línea ${targetVuln.line}.`
+          );
+        } else {
+          vscode.window.showErrorMessage('VulX: No se pudo aplicar la corrección.');
 
-          if (matchingVuln && matchingVuln.remediation?.fixedSnippet) {
-            const fix = new vscode.CodeAction(
-              `Aplicar corrección de VulX: ${matchingVuln.remediation.explanation}`,
-              vscode.CodeActionKind.QuickFix
-            );
-            fix.diagnostics = [diagnostic];
-            fix.isPreferred = true;
-
-            const edit = new vscode.WorkspaceEdit();
-
-            const targetLine = document.lineAt(diagnostic.range.start.line);
-            const lineText = targetLine.text;
-            const indent = lineText.match(/^\s*/)?.[0] || '';
-
-            // Caso especial para secretos hardcodeados (el snippet viene enmascarado con asteriscos)
-            if (matchingVuln.id === 'HARDCODED_SECRET') {
-              const quoteMatch = lineText.match(/(['"])(?:(?!\1).){8,}\1/);
-              if (quoteMatch && typeof quoteMatch.index === 'number') {
-                const quoteRange = new vscode.Range(
-                  new vscode.Position(diagnostic.range.start.line, quoteMatch.index),
-                  new vscode.Position(diagnostic.range.start.line, quoteMatch.index + quoteMatch[0].length)
-                );
-                edit.replace(document.uri, quoteRange, matchingVuln.remediation.fixedSnippet);
-                fix.edit = edit;
-                actions.push(fix);
-                continue;
-              }
-            }
-
-            // 1. Si el fragmento vulnerable exacto existe dentro de la línea y el reemplazo es de una sola línea:
-            const snippetIdx = lineText.indexOf(matchingVuln.codeSnippet);
-            if (
-              snippetIdx !== -1 &&
-              !matchingVuln.remediation.fixedSnippet.includes('\n')
-            ) {
-              const snippetRange = new vscode.Range(
-                new vscode.Position(diagnostic.range.start.line, snippetIdx),
-                new vscode.Position(
-                  diagnostic.range.start.line,
-                  snippetIdx + matchingVuln.codeSnippet.length
-                )
-              );
-              edit.replace(
-                document.uri,
-                snippetRange,
-                matchingVuln.remediation.fixedSnippet
-              );
-            } else {
-              // 2. Si reemplaza la línea completa, respetar la indentación original
-              const indented = matchingVuln.remediation.fixedSnippet
-                .split(/\r?\n/)
-                .map((l) => (l.trim().length > 0 ? `${indent}${l.trim()}` : ''))
-                .join('\n');
-              edit.replace(document.uri, targetLine.range, indented);
-            }
-
-            fix.edit = edit;
-            actions.push(fix);
-          }
         }
-
-        return actions;
-      },
-    },
-    {
-      providedCodeActionKinds: [vscode.CodeActionKind.QuickFix],
+      }
     }
   );
 
@@ -398,6 +410,7 @@ export function activate(context: vscode.ExtensionContext) {
     readBufferCmd,
     analyzeCurrentFileCmd,
     clearDiagnosticsCmd,
+    applyFixCmd,
     onSaveListener,
     onCloseListener,
     onEditorChangeListener,

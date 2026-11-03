@@ -45,6 +45,11 @@
       {
         "command": "vulx.scanCurrentFile",
         "title": "VulX: Preparar payload de escaneo (Buffer activo)"
+      },
+      {
+        "command": "vulx.applyFix",
+        "title": "VulX: Aplicar corrección de seguridad (Quick Fix)",
+        "icon": "$(lightbulb-autofix)"
       }
     ],
     "keybindings": [
@@ -57,6 +62,12 @@
       {
         "command": "vulx.analyzeCurrentFile",
         "key": "alt+shift+v",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "vulx.applyFix",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f",
         "when": "editorTextFocus"
       }
     ],
@@ -74,6 +85,11 @@
         {
           "command": "vulx.clearDiagnostics",
           "group": "vulx_group@3"
+        },
+        {
+          "command": "vulx.applyFix",
+          "group": "vulx_group@4",
+          "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
         }
       ],
       "editor/title": [
