@@ -40,7 +40,7 @@ function getVulxConfig(): VulxConfig {
   };
 }
 
-// Almacenamiento en memoria de hallazgos por documento para Quick Fixes
+// Almacenamiento en memoria de hallazgos por documento para Quick Fixes y Hover
 const documentVulnerabilities = new Map<string, VulnerabilityResponse[]>();
 
 /**
@@ -106,7 +106,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // 1. Comando de prueba del ciclo de vida
   const helloWorldCmd = vscode.commands.registerCommand('vulx.helloWorld', () => {
-    const msg = '¡VulX está activo y listo para analizar vulnerabilidades!';
+    const msg = 'VulX está activo y listo para analizar vulnerabilidades.';
     outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Comando] vulx.helloWorld ejecutado.`);
     vscode.window.showInformationMessage(msg);
   });
@@ -117,7 +117,7 @@ export function activate(context: vscode.ExtensionContext) {
     const current = config.get<boolean>('enableOnSave', true);
     await config.update('enableOnSave', !current, vscode.ConfigurationTarget.Global);
     const estado = !current ? 'ACTIVADO' : 'DESACTIVADO';
-    const msg = `🛡️ VulX: Análisis automático al guardar ${estado}.`;
+    const msg = `VulX: Análisis automático al guardar ${estado}.`;
     outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [Config] ${msg}`);
     vscode.window.showInformationMessage(msg);
   });
@@ -173,7 +173,7 @@ export function activate(context: vscode.ExtensionContext) {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: '🛡️ VulX: Analizando vulnerabilidades…',
+        title: 'VulX: Analizando vulnerabilidades…',
         cancellable: false,
       },
       () => analyzeDocument(editor.document, 'onDemand')
@@ -338,6 +338,7 @@ export function activate(context: vscode.ExtensionContext) {
           );
         } else {
           vscode.window.showErrorMessage('VulX: No se pudo aplicar la corrección.');
+
         }
       }
     }
@@ -349,6 +350,51 @@ export function activate(context: vscode.ExtensionContext) {
       applyLineHighlights(editor);
     }
   });
+
+  // ── 10. HoverProvider enriquecido: tooltip con detalles de vulnerabilidad en Markdown (Semana 8 - Leo) ──
+  // Formato técnico y sobrio estándar industrial (estilo SonarLint / Snyk)
+  const hoverProvider = vscode.languages.registerHoverProvider(
+    supportedLanguages.map((lang) => ({ language: lang })),
+    {
+      provideHover(document, position, _token) {
+        const vulns = documentVulnerabilities.get(document.uri.toString());
+        if (!vulns || vulns.length === 0) {
+          return null;
+        }
+
+        // Buscar vulnerabilidades cuya línea (1-indexed) coincida con la posición del cursor (0-indexed)
+        const hoveredLine = position.line + 1;
+        const matchingVulns = vulns.filter((v) => v.line === hoveredLine);
+
+        if (matchingVulns.length === 0) {
+          return null;
+        }
+
+        // Construir contenido Markdown enriquecido para todas las vulnerabilidades en esa línea
+        const markdown = new vscode.MarkdownString();
+        markdown.isTrusted = true;
+        markdown.supportHtml = true;
+
+        for (let i = 0; i < matchingVulns.length; i++) {
+          const vuln = matchingVulns[i];
+
+          // Separador visual entre múltiples vulnerabilidades en la misma línea
+          if (i > 0) {
+            markdown.appendMarkdown('\n\n---\n\n');
+          }
+
+          // Construir el contenido enriquecido del tooltip
+          markdown.appendMarkdown(buildVulnerabilityHoverContent(vuln, document.languageId));
+        }
+
+        // Asociar el hover al rango completo de la línea vulnerable
+        const lineIndex = Math.min(Math.max(0, hoveredLine - 1), Math.max(0, document.lineCount - 1));
+        const line = document.lineAt(lineIndex);
+
+        return new vscode.Hover(markdown, line.range);
+      },
+    }
+  );
 
   // Registrar todos los disposables
   context.subscriptions.push(
@@ -368,7 +414,8 @@ export function activate(context: vscode.ExtensionContext) {
     onSaveListener,
     onCloseListener,
     onEditorChangeListener,
-    codeActionProvider
+    codeActionProvider,
+    hoverProvider
   );
 }
 
@@ -488,9 +535,10 @@ async function analyzeDocument(
         severity = vscode.DiagnosticSeverity.Information;
       }
 
+      // Mensaje técnico limpio para el panel de problemas y hover nativo sin emojis
       const diagnostic = new vscode.Diagnostic(
         range,
-        `[VulX] ${vuln.name}: ${vuln.description}\n\n💡 Recomendación: ${vuln.recommendation}`,
+        `[VulX] ${vuln.name}: ${vuln.description} | Recomendación: ${vuln.recommendation}`,
         severity
       );
 
@@ -527,10 +575,10 @@ async function analyzeDocument(
     if (config.showNotifications) {
       if (vulnerabilities.length > 0) {
         vscode.window.showWarningMessage(
-          `🛡️ VulX detectó ${vulnerabilities.length} vulnerabilidad(es) de seguridad [${triggerSource}]. Revisa el panel de Problemas (Ctrl+Shift+M).`
+          `VulX detectó ${vulnerabilities.length} vulnerabilidad(es) de seguridad [${triggerSource}]. Revisa el panel de Problemas (Ctrl+Shift+M).`
         );
       } else if (triggerSource === 'onDemand') {
-        vscode.window.showInformationMessage('🛡️ VulX: No se detectaron vulnerabilidades en el archivo analizado.');
+        vscode.window.showInformationMessage('VulX: No se detectaron vulnerabilidades en el archivo analizado.');
       }
     }
   } catch (err) {
@@ -559,6 +607,81 @@ async function analyzeDocument(
 }
 
 /**
+ * Construye el contenido Markdown sobrio y estructurado para el tooltip de hover de una vulnerabilidad,
+ * siguiendo el estándar visual corporativo de linters profesionales (estilo SonarLint / Snyk / CodeQL).
+ */
+function buildVulnerabilityHoverContent(vuln: VulnerabilityResponse, languageId: string): string {
+  const lines: string[] = [];
+  const severityUpper = vuln.severity.toUpperCase();
+
+  // ── 1. Encabezado en español técnico ──
+  lines.push(`### VulX Seguridad: ${vuln.name}`);
+
+  // ── 2. Insignias con recuadro de fondo contrastado (<kbd>) ──
+  lines.push(
+    `<kbd>Regla: ${vuln.id}</kbd> &nbsp; <kbd>Severidad: ${severityUpper}</kbd> &nbsp; <kbd>Motor: VulX AST</kbd>`
+  );
+  lines.push('');
+
+  // ── 3. Caja de Análisis con borde y fondo sombreado (Blockquote) ──
+  lines.push('> **Análisis de Vulnerabilidad**');
+  lines.push('>');
+  for (const paragraph of vuln.description.split(/\r?\n/)) {
+    if (paragraph.trim().length > 0) {
+      lines.push(`> ${paragraph}`);
+    }
+  }
+  lines.push('');
+
+  // ── 4. Bloque de código detectado ──
+  if (vuln.codeSnippet) {
+    lines.push('**Código detectado:**');
+    const lang = languageId.includes('typescript') ? 'typescript' : 'javascript';
+    lines.push('```' + lang);
+    lines.push(vuln.codeSnippet);
+    lines.push('```');
+    lines.push('');
+  }
+
+  // ── 5. Caja de Remediación con borde y fondo sombreado (Blockquote) ──
+  lines.push('> **Guía de Remediación**');
+  lines.push('>');
+  for (const paragraph of vuln.recommendation.split(/\r?\n/)) {
+    if (paragraph.trim().length > 0) {
+      lines.push(`> ${paragraph}`);
+    }
+  }
+  lines.push('');
+
+  // ── 6. Previsualización de Código Corregido (si la API devuelve remediación) ──
+  if (vuln.remediation) {
+    lines.push('**Corrección sugerida:**');
+    if (vuln.remediation.explanation) {
+      lines.push(`*${vuln.remediation.explanation}*`);
+      lines.push('');
+    }
+
+    if (vuln.remediation.diff) {
+      lines.push('```diff');
+      lines.push(vuln.remediation.diff);
+      lines.push('```');
+    } else if (vuln.remediation.fixedSnippet) {
+      const lang = languageId.includes('typescript') ? 'typescript' : 'javascript';
+      lines.push('```' + lang);
+      lines.push(vuln.remediation.fixedSnippet);
+      lines.push('```');
+    }
+    lines.push('');
+  }
+
+  // ── 7. Pie de Acción Rápida en español ──
+  lines.push('---');
+  lines.push('*Corrección rápida: Presiona `Ctrl+.` para aplicar la solución sugerida.*');
+
+  return lines.join('\n');
+}
+
+/**
  * Aplica decoraciones de resaltado de línea (line highlights) en el editor,
  * agrupando las vulnerabilidades almacenadas por severidad para ofrecer
  * retroalimentación visual inmediata sobre las líneas afectadas.
@@ -583,7 +706,7 @@ function applyLineHighlights(editor: vscode.TextEditor): void {
     const decoration: vscode.DecorationOptions = {
       range: line.range,
       hoverMessage: new vscode.MarkdownString(
-        `**🛡️ VulX — ${vuln.name}** (\`${vuln.severity.toUpperCase()}\`)\n\n${vuln.description}\n\n💡 *${vuln.recommendation}*`
+        `**VulX Seguridad: ${vuln.name}** (\`${vuln.severity.toUpperCase()}\`)\n\n${vuln.description}\n\n*Recomendación: ${vuln.recommendation}*`
       ),
     };
 
