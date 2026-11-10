@@ -1,0 +1,500 @@
+openapi: 3.0.3
+info:
+  title: VulX Security Analysis API
+  description: |
+    API REST local para **VulX**, el sistema inteligente de detección y remediación asistida de vulnerabilidades de código fuente para JavaScript y TypeScript.
+    
+    Combina análisis sintáctico determinístico con Abstract Syntax Trees (**Tree-sitter**) e inferencia generativa local (**Ollama / Qwen 2.5 Coder 7B**) para proporcionar diagnósticos de seguridad en tiempo real, diffs unificados estilo Git y coordenadas de reemplazo de precisión para editores compatibles con VS Code y Google Antigravity.
+    
+    ### Principios de Diseño
+    - **100% Local y Privado**: El código fuente nunca abandona la máquina del desarrollador.
+    - **Rápido**: Análisis estático mediante Tree-sitter (< 100 ms).
+    - **Resiliente**: Fallback heurístico determinístico automático en caso de que Ollama no esté disponible o tarde demasiado.
+  version: 1.0.0
+  contact:
+    name: Equipo de Desarrollo VulX
+    url: https://github.com/lexxx02/Vul_X
+  license:
+    name: ISC
+    url: https://opensource.org/licenses/ISC
+
+servers:
+  - url: http://127.0.0.1:3000
+    description: Servidor local de desarrollo por defecto
+  - url: http://localhost:3000
+    description: Servidor local alternativo
+
+tags:
+  - name: Health
+    description: Diagnóstico de estado y disponibilidad del servicio
+  - name: Rules
+    description: Catálogo e inspección del motor de reglas de seguridad
+  - name: Analysis
+    description: Motor de análisis estático (AST), auditoría profunda (DeepScan) y remediación con IA
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Verificación de estado del servidor (Health Check)
+      description: Retorna el estado operativo de la instancia Fastify y la marca de tiempo ISO 8601 actual.
+      operationId: getHealth
+      responses:
+        '200':
+          description: El servicio está en ejecución y listo para procesar solicitudes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "ok"
+                timestamp: "2026-11-09T21:40:00.000Z"
+
+  /rules:
+    get:
+      tags:
+        - Rules
+      summary: Catálogo de reglas de seguridad activas
+      description: Retorna la lista de reglas de seguridad registradas en el RuleEngine, incluyendo identificador único, nombre legible, severidad y lenguajes soportados.
+      operationId: getRegisteredRules
+      responses:
+        '200':
+          description: Lista de reglas de seguridad registradas exitosamente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RulesResponse'
+              example:
+                status: "success"
+                count: 6
+                rules:
+                  - id: "EVAL_USAGE"
+                    name: "Uso peligroso de eval()"
+                    severity: "critical"
+                    supportedLanguages: ["javascript", "typescript"]
+                  - id: "DOM_XSS"
+                    name: "Manipulación insegura del DOM (XSS)"
+                    severity: "high"
+                    supportedLanguages: ["javascript", "typescript"]
+                  - id: "SQL_INJECTION"
+                    name: "Posible Inyección SQL"
+                    severity: "critical"
+                    supportedLanguages: ["javascript", "typescript"]
+                  - id: "HARDCODED_SECRET"
+                    name: "Secreto codificado en el código"
+                    severity: "critical"
+                    supportedLanguages: ["javascript", "typescript"]
+                  - id: "COMMAND_INJECTION"
+                    name: "Inyección de comandos del sistema operativo (OS Command Injection)"
+                    severity: "critical"
+                    supportedLanguages: ["javascript", "typescript"]
+                  - id: "PATH_TRAVERSAL"
+                    name: "Recorrido de rutas arbitrario (Path Traversal)"
+                    severity: "high"
+                    supportedLanguages: ["javascript", "typescript"]
+
+  /analyze:
+    post:
+      tags:
+        - Analysis
+      summary: Analizar código fuente en busca de vulnerabilidades y generar parches
+      description: |
+        Punto de entrada principal para el escaneo de código.
+        
+        Ejecuta el pipeline completo de análisis:
+        1. **Tree-sitter Parsing**: Genera el AST para JavaScript o TypeScript.
+        2. **RuleEngine Execution**: Evalúa las reglas activas de seguridad.
+        3. **AI Deep Scan (opcional)**: Si `deepScan` es `true`, envía el código completo a Ollama para detectar fallos de lógica semántica complejos (SSRF, Broken Auth, Weak Crypto, etc.).
+        4. **AI Remediation Enrichment**: Si `includeRemediation` no es `false`, cada hallazgo es enriquecido con una explicación técnica, código corregido, diff unificado y coordenadas exactas (`replacementRange`) para el QuickFix del IDE.
+      operationId: analyzeCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeRequest'
+            examples:
+              xssExample:
+                summary: Vulnerabilidad DOM XSS (innerHTML)
+                value:
+                  code: |
+                    function renderUserBio(bio) {
+                      const container = document.getElementById("bio");
+                      container.innerHTML = bio;
+                    }
+                  language: "javascript"
+                  filePath: "src/components/profile.js"
+                  includeRemediation: true
+                  deepScan: false
+              sqlInjectionExample:
+                summary: Inyección SQL con concatenación
+                value:
+                  code: |
+                    const query = "SELECT * FROM users WHERE id = " + userId;
+                    db.query(query);
+                  language: "typescript"
+                  filePath: "src/repositories/UserRepository.ts"
+                  includeRemediation: true
+                  deepScan: false
+              deepScanExample:
+                summary: Auditoría Semántica Profunda con IA
+                value:
+                  code: |
+                    const crypto = require('crypto');
+                    function hashPassword(password) {
+                      return crypto.createHash('md5').update(password).digest('hex');
+                    }
+                  language: "javascript"
+                  deepScan: true
+      responses:
+        '200':
+          description: Análisis completado exitosamente. Retorna lista de vulnerabilidades encontradas y resumen estadístico.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeResponse'
+              examples:
+                xssResponse:
+                  summary: Hallazgo de DOM XSS con parche generado
+                  value:
+                    status: "success"
+                    message: "Análisis completado: se detectaron 1 vulnerabilidad(es)"
+                    analysis:
+                      vulnerabilities:
+                        - id: "DOM_XSS"
+                          name: "Manipulación insegura del DOM (XSS)"
+                          description: 'Asignación directa a "innerHTML" detectada. La manipulación insegura del DOM mediante innerHTML interpreta cadenas de texto como HTML ejecutable.'
+                          severity: "high"
+                          line: 3
+                          column: 2
+                          codeSnippet: "container.innerHTML = bio;"
+                          recommendation: 'Evita asignar directamente a innerHTML. Utiliza propiedades seguras como "textContent" o "innerText".'
+                          remediation:
+                            explanation: "Reemplazar innerHTML por textContent para prevenir la ejecución arbitraria de scripts (XSS)."
+                            fixedSnippet: "container.textContent = bio;"
+                            diff: "- container.innerHTML = bio;\n+ container.textContent = bio;"
+                            replacementRange:
+                              startLine: 3
+                              endLine: 3
+                              startColumn: 2
+                              endColumn: 27
+                      summary:
+                        total: 1
+                        critical: 0
+                        high: 1
+                        medium: 0
+                        low: 0
+                        durationMs: 45
+        '400':
+          description: Payload inválido (falta el campo obligatorio `code` o tipo incorrecto).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                statusCode: 400
+                error: "Bad Request"
+                message: "body must have required property 'code'"
+        '500':
+          description: Error interno del servidor al procesar la solicitud.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                statusCode: 500
+                error: "Internal Server Error"
+                message: "Fallo inesperado durante el parseo de Tree-sitter"
+
+  /api/v1/analyze:
+    post:
+      tags:
+        - Analysis
+      summary: Alias versionado de /analyze
+      description: Endpoint completamente equivalente a `/analyze` para garantizar compatibilidad con versiones futuras o integraciones semánticas.
+      operationId: analyzeCodeV1
+      requestBody:
+        $ref: '#/paths/~1analyze/post/requestBody'
+      responses:
+        '200':
+          $ref: '#/paths/~1analyze/post/responses/200'
+        '400':
+          $ref: '#/paths/~1analyze/post/responses/400'
+        '500':
+          $ref: '#/paths/~1analyze/post/responses/500'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          example: "ok"
+          description: Estado de salud de la instancia.
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-11-09T21:40:00.000Z"
+          description: Marca de tiempo ISO del servidor.
+
+    RuleSummary:
+      type: object
+      required:
+        - id
+        - name
+        - severity
+        - supportedLanguages
+      properties:
+        id:
+          type: string
+          example: "DOM_XSS"
+          description: Identificador único de la regla de seguridad.
+        name:
+          type: string
+          example: "Manipulación insegura del DOM (XSS)"
+          description: Nombre legible de la vulnerabilidad.
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          example: "high"
+          description: Nivel de severidad asignado por la regla.
+        supportedLanguages:
+          type: array
+          items:
+            type: string
+          example: ["javascript", "typescript"]
+          description: Lista de lenguajes compatibles.
+
+    RulesResponse:
+      type: object
+      required:
+        - status
+        - count
+        - rules
+      properties:
+        status:
+          type: string
+          example: "success"
+        count:
+          type: integer
+          example: 6
+          description: Cantidad total de reglas activas en el RuleEngine.
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuleSummary'
+
+    AnalyzeRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          minLength: 1
+          description: Código fuente a analizar (archivo completo o fragmento activo).
+          example: 'container.innerHTML = userInput;'
+        language:
+          type: string
+          description: Lenguaje de programación. Si se omite, se infiere automáticamente de `filePath` o del contenido.
+          enum: [javascript, typescript, js, ts, javascriptreact, typescriptreact]
+          example: "javascript"
+        filePath:
+          type: string
+          description: Ruta absoluta o relativa del archivo original en el workspace.
+          example: "src/controllers/userController.js"
+        includeRemediation:
+          type: boolean
+          default: true
+          description: Si es `true`, enriquece cada hallazgo con el parche de código y explicación generada por IA (u heurística).
+          example: true
+        deepScan:
+          type: boolean
+          default: false
+          description: Si es `true`, ejecuta además la auditoría semántica profunda con IA para vulnerabilidades lógicas complejas.
+          example: false
+
+    ReplacementRange:
+      type: object
+      required:
+        - startLine
+        - endLine
+        - startColumn
+        - endColumn
+      description: Coordenadas de reemplazo 1-indexed para que el IDE aplique el Quick Fix con precisión quirúrgica.
+      properties:
+        startLine:
+          type: integer
+          minimum: 1
+          example: 3
+          description: Línea inicial de la sustitución (1-indexed).
+        endLine:
+          type: integer
+          minimum: 1
+          example: 3
+          description: Línea final de la sustitución (1-indexed).
+        startColumn:
+          type: integer
+          minimum: 0
+          example: 2
+          description: Columna inicial (carácter) del reemplazo.
+        endColumn:
+          type: integer
+          minimum: 0
+          example: 27
+          description: Columna final (carácter) del reemplazo.
+
+    RemediationPayload:
+      type: object
+      required:
+        - explanation
+        - fixedSnippet
+        - diff
+      properties:
+        explanation:
+          type: string
+          example: "Reemplazar innerHTML por textContent para evitar Cross-Site Scripting (XSS)."
+          description: Justificación técnica concisa de la solución.
+        fixedSnippet:
+          type: string
+          example: "container.textContent = userInput;"
+          description: Código fuente corregido que reemplaza al fragmento vulnerable.
+        diff:
+          type: string
+          example: "- container.innerHTML = userInput;\n+ container.textContent = userInput;"
+          description: Diff en formato unificado estilo Git (con prefijos - y +).
+        replacementRange:
+          $ref: '#/components/schemas/ReplacementRange'
+
+    Vulnerability:
+      type: object
+      required:
+        - id
+        - name
+        - description
+        - severity
+        - line
+        - column
+        - codeSnippet
+        - recommendation
+      properties:
+        id:
+          type: string
+          example: "DOM_XSS"
+          description: Identificador de la regla o patrón detectado.
+        name:
+          type: string
+          example: "Manipulación insegura del DOM (XSS)"
+          description: Nombre conciso de la vulnerabilidad.
+        description:
+          type: string
+          example: "Asignación directa a innerHTML detectada. Permite inyección de código malicioso."
+          description: Detalle del vector de ataque y su impacto.
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          example: "high"
+          description: Nivel de peligro de la vulnerabilidad.
+        line:
+          type: integer
+          minimum: 1
+          example: 10
+          description: Número de línea donde inicia el problema en el código fuente (1-indexed).
+        column:
+          type: integer
+          minimum: 0
+          example: 4
+          description: Columna de inicio del código vulnerable.
+        codeSnippet:
+          type: string
+          example: "container.innerHTML = userInput;"
+          description: Fragmento de código extraído por Tree-sitter que detonó la alerta.
+        recommendation:
+          type: string
+          example: "Utiliza textContent o sanitiza con DOMPurify antes de renderizar."
+          description: Recomendación técnica estándar para mitigar el riesgo.
+        remediation:
+          $ref: '#/components/schemas/RemediationPayload'
+
+    AnalysisSummary:
+      type: object
+      required:
+        - total
+        - critical
+        - high
+        - medium
+        - low
+        - durationMs
+      properties:
+        total:
+          type: integer
+          example: 1
+          description: Número total de vulnerabilidades encontradas.
+        critical:
+          type: integer
+          example: 0
+        high:
+          type: integer
+          example: 1
+        medium:
+          type: integer
+          example: 0
+        low:
+          type: integer
+          example: 0
+        durationMs:
+          type: number
+          example: 38
+          description: Tiempo total en milisegundos que tomó el pipeline de análisis.
+
+    AnalysisResult:
+      type: object
+      required:
+        - vulnerabilities
+        - summary
+      properties:
+        vulnerabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Vulnerability'
+        summary:
+          $ref: '#/components/schemas/AnalysisSummary'
+
+    AnalyzeResponse:
+      type: object
+      required:
+        - status
+        - message
+        - analysis
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Análisis completado: se detectaron 1 vulnerabilidad(es)"
+        analysis:
+          $ref: '#/components/schemas/AnalysisResult'
+
+    ErrorResponse:
+      type: object
+      required:
+        - statusCode
+        - error
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 400
+        error:
+          type: string
+          example: "Bad Request"
+        message:
+          type: string
+          example: "body must have required property 'code'"
+
