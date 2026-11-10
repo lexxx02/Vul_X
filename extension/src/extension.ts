@@ -3,6 +3,10 @@ import {
   VulxCodeActionProvider,
   type VulnerabilityResponse,
 } from './VulxCodeActionProvider';
+import {
+  VulxDiffContentProvider,
+  VulxDiffInspector,
+} from './VulxDiffInspector';
 
 // Canal de salida dedicado para los logs de VulX en la consola del IDE
 let outputChannel: vscode.OutputChannel;
@@ -344,6 +348,25 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // 8c. Inspector de Diffs: Previsualización lado a lado antes de aplicar parche (Side-by-side diff)
+  const diffContentProvider = new VulxDiffContentProvider();
+  const diffRegistration = vscode.workspace.registerTextDocumentContentProvider(
+    VulxDiffContentProvider.scheme,
+    diffContentProvider
+  );
+  const diffInspector = new VulxDiffInspector(
+    diffContentProvider,
+    documentVulnerabilities,
+    outputChannel
+  );
+
+  const previewDiffCmd = vscode.commands.registerCommand(
+    'vulx.previewDiff',
+    async (vulnId?: string, lineNumber?: number) => {
+      await diffInspector.previewDiff(vulnId, lineNumber);
+    }
+  );
+
   // 9. Re-aplicar decoraciones de línea al cambiar de editor activo
   const onEditorChangeListener = vscode.window.onDidChangeActiveTextEditor((editor) => {
     if (editor) {
@@ -411,6 +434,8 @@ export function activate(context: vscode.ExtensionContext) {
     analyzeCurrentFileCmd,
     clearDiagnosticsCmd,
     applyFixCmd,
+    previewDiffCmd,
+    diffRegistration,
     onSaveListener,
     onCloseListener,
     onEditorChangeListener,

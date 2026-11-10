@@ -50,6 +50,11 @@
         "command": "vulx.applyFix",
         "title": "VulX: Aplicar corrección de seguridad (Quick Fix)",
         "icon": "$(lightbulb-autofix)"
+      },
+      {
+        "command": "vulx.previewDiff",
+        "title": "VulX: Inspeccionar Diff de remediación (Lado a lado)",
+        "icon": "$(diff)"
       }
     ],
     "keybindings": [
@@ -68,6 +73,12 @@
         "command": "vulx.applyFix",
         "key": "ctrl+alt+f",
         "mac": "cmd+alt+f",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "vulx.previewDiff",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d",
         "when": "editorTextFocus"
       }
     ],
@@ -89,6 +100,11 @@
         {
           "command": "vulx.applyFix",
           "group": "vulx_group@4",
+          "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
+        },
+        {
+          "command": "vulx.previewDiff",
+          "group": "vulx_group@5",
           "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
         }
       ],
