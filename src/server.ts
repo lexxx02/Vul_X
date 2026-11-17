@@ -4,11 +4,15 @@ import Fastify, {
   type FastifyReply
 } from 'fastify';
 import { createAnalyzer, Analyzer } from '../core/Analyzer.js';
+import { registerSwaggerDocumentation } from './services/SwaggerService.js';
 
 
 export const server: FastifyInstance = Fastify({
   logger: process.env.NODE_ENV === 'test' ? false : true
 });
+
+// Registrar documentación interactiva Swagger UI y Scalar (/documentation, /docs, /docs/scalar, /docs/openapi.yaml)
+registerSwaggerDocumentation(server);
 
 export const analyzer: Analyzer = createAnalyzer(
   process.env.NODE_ENV === 'test' ? { timeoutMs: 3_000 } : undefined
