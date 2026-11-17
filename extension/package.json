@@ -2,8 +2,9 @@
   "name": "vulx-extension",
   "displayName": "VulX Security Analyzer",
   "description": "Extensión de VS Code para detección inteligente y contextual de vulnerabilidades en código",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "vulx-team",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
