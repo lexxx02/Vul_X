@@ -19,10 +19,12 @@ info:
     url: https://opensource.org/licenses/ISC
 
 servers:
+  - url: /
+    description: Servidor local relativo (automático según host y puerto)
   - url: http://127.0.0.1:3000
-    description: Servidor local de desarrollo por defecto
+    description: Servidor local directo por IP
   - url: http://localhost:3000
-    description: Servidor local alternativo
+    description: Servidor local directo por localhost
 
 tags:
   - name: Health
