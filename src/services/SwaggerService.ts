@@ -80,6 +80,7 @@ export function registerSwaggerDocumentation(server: FastifyInstance): void {
           <span class="vulx-badge">OpenAPI 3.0.3</span>
         </a>
         <div class="vulx-links">
+          <a class="vulx-link" href="/dashboard" style="color: #60a5fa; font-weight: 700;">⚡ Live Dashboard</a>
           <a class="vulx-link" href="/docs/scalar">Vista Scalar Reference</a>
           <a class="vulx-link" href="/docs/openapi.yaml" target="_blank">Descargar YAML</a>
           <a class="vulx-link" href="/health" target="_blank">Health Check</a>

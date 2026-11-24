@@ -56,6 +56,11 @@
         "command": "vulx.previewDiff",
         "title": "VulX: Inspeccionar Diff de remediación (Lado a lado)",
         "icon": "$(diff)"
+      },
+      {
+        "command": "vulx.openDashboard",
+        "title": "VulX: Abrir Live Security Dashboard",
+        "icon": "$(graph)"
       }
     ],
     "keybindings": [
@@ -107,6 +112,10 @@
           "command": "vulx.previewDiff",
           "group": "vulx_group@5",
           "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
+        },
+        {
+          "command": "vulx.openDashboard",
+          "group": "vulx_group@6"
         }
       ],
       "editor/title": [
@@ -114,6 +123,10 @@
           "command": "vulx.analyzeCurrentFile",
           "group": "navigation",
           "when": "resourceLangId =~ /javascript|typescript|javascriptreact|typescriptreact/"
+        },
+        {
+          "command": "vulx.openDashboard",
+          "group": "navigation"
         }
       ]
     },

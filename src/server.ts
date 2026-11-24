@@ -5,6 +5,7 @@ import Fastify, {
 } from 'fastify';
 import { createAnalyzer, Analyzer } from '../core/Analyzer.js';
 import { registerSwaggerDocumentation } from './services/SwaggerService.js';
+import { registerDashboard } from './services/DashboardService.js';
 
 
 export const server: FastifyInstance = Fastify({
@@ -35,6 +36,9 @@ registerSwaggerDocumentation(server);
 export const analyzer: Analyzer = createAnalyzer(
   process.env.NODE_ENV === 'test' ? { timeoutMs: 3_000 } : undefined
 );
+
+// Registrar VulX Live Security Dashboard y generador de reportes (/dashboard, /report, /report/html)
+registerDashboard(server, analyzer);
 
 // Accesores de compatibilidad (usados por /rules y tests existentes)
 export const ruleEngine = analyzer.getRuleEngine();

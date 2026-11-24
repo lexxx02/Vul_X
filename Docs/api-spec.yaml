@@ -33,8 +33,46 @@ tags:
     description: Catálogo e inspección del motor de reglas de seguridad
   - name: Analysis
     description: Motor de análisis estático (AST), auditoría profunda (DeepScan) y remediación con IA
+  - name: Dashboard & Reports
+    description: Panel de control visual interactivo en vivo y generador de reportes ejecutivos HTML
 
 paths:
+  /dashboard:
+    get:
+      tags:
+        - Dashboard & Reports
+      summary: Panel de control interactivo de seguridad en tiempo real (Live Dashboard)
+      description: Sirve la interfaz web visual para análisis en tiempo real, con gráficos dinámicos de severidad (Chart.js), score de riesgo y carga de escenarios vulnerables (SQLi, XSS, Path Traversal).
+      operationId: getDashboard
+      responses:
+        '200':
+          description: Interfaz HTML moderna del VulX Live Security Dashboard.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /report/html:
+    post:
+      tags:
+        - Dashboard & Reports
+      summary: Generar reporte ejecutivo de auditoría en formato HTML
+      description: Analiza el código fuente enviado y devuelve un documento HTML autónomo e imprimible con el reporte de hallazgos, métricas de riesgo y remediaciones.
+      operationId: generateHtmlReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeRequest'
+      responses:
+        '200':
+          description: Reporte ejecutivo HTML autónomo listo para descargar o imprimir en PDF.
+          content:
+            text/html:
+              schema:
+                type: string
+
   /health:
     get:
       tags:

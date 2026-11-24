@@ -200,6 +200,16 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage('VulX: Diagnósticos de seguridad limpiados.');
   });
 
+  // 5b. Comando para abrir el Live Security Dashboard
+  const openDashboardCmd = vscode.commands.registerCommand('vulx.openDashboard', () => {
+    const config = getVulxConfig();
+    const dashboardUri = vscode.Uri.parse(`${config.apiUrl}/dashboard`);
+    outputChannel.appendLine(
+      `[${new Date().toLocaleTimeString()}] [Dashboard] Abriendo VulX Live Dashboard en: ${dashboardUri.toString()}`
+    );
+    vscode.env.openExternal(dashboardUri);
+  });
+
   // 6. Ciclo de vida: Listener de guardado de documentos (Trigger al guardar archivo - onSave)
   const onSaveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
     if (supportedLanguages.includes(document.languageId)) {
@@ -433,6 +443,7 @@ export function activate(context: vscode.ExtensionContext) {
     readBufferCmd,
     analyzeCurrentFileCmd,
     clearDiagnosticsCmd,
+    openDashboardCmd,
     applyFixCmd,
     previewDiffCmd,
     diffRegistration,
@@ -600,10 +611,22 @@ async function analyzeDocument(
     if (config.showNotifications) {
       if (vulnerabilities.length > 0) {
         vscode.window.showWarningMessage(
-          `VulX detectó ${vulnerabilities.length} vulnerabilidad(es) de seguridad [${triggerSource}]. Revisa el panel de Problemas (Ctrl+Shift+M).`
-        );
+          `VulX detectó ${vulnerabilities.length} vulnerabilidad(es) de seguridad [${triggerSource}]. Revisa el panel de Problemas (Ctrl+Shift+M).`,
+          'Abrir Dashboard'
+        ).then((selection) => {
+          if (selection === 'Abrir Dashboard') {
+            vscode.commands.executeCommand('vulx.openDashboard');
+          }
+        });
       } else if (triggerSource === 'onDemand') {
-        vscode.window.showInformationMessage('VulX: No se detectaron vulnerabilidades en el archivo analizado.');
+        vscode.window.showInformationMessage(
+          'VulX: No se detectaron vulnerabilidades en el archivo analizado.',
+          'Abrir Dashboard'
+        ).then((selection) => {
+          if (selection === 'Abrir Dashboard') {
+            vscode.commands.executeCommand('vulx.openDashboard');
+          }
+        });
       }
     }
   } catch (err) {
